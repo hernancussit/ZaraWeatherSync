@@ -1,14 +1,14 @@
 """
 Interfaz de usuario moderna con CustomTkinter para ZaraWeatherSync.
-Incluye:
-- Detección automática por IP con opción de fijar ubicación permanente y recomendación.
-- Catálogo de 57 ciudades mundiales predefinidas y coordenadas manuales.
-- Selector de unidad de temperatura (°C / °F).
-- Frecuencia de actualización configurable con validación estricta de límites de Open-Meteo API.
-- Adaptabilidad total a pantallas con zoom DPI (125%/150%) y barra fija inferior.
+Diseño compacto de tamaño fijo con navegación por vistas:
+- Pantalla Principal de Clima (Monitor en Vivo): Tarjetas legibles de temperatura, humedad, última sincronización y estado.
+- Pantalla de Configuración: Ajustes de ubicación, unidades, frecuencia de actualización con validación API,
+  carpeta de ZaraRadio, inicio automático y soporte.
+- Reintento inteligente de conectividad cada 5 minutos si ocurre un fallo.
 """
 
 import os
+import sys
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -16,8 +16,8 @@ from tkinter import filedialog, messagebox
 from typing import Optional
 
 import customtkinter as ctk
-
 import webbrowser
+
 from core.version import __version__, GITHUB_REPO_FULL, DONATION_URL
 from core.updater import check_for_updates, download_update_file, apply_update_and_restart
 from core.config import (
@@ -42,11 +42,19 @@ class ZaraWeatherApp(ctk.CTk):
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
-        # Propiedades de la ventana con soporte responsivo y DPI scaling
+        # Ventana compacta de tamaño fijo (no ocupa toda la pantalla)
         self.title("ZaraWeatherSync - Complemento ZaraRadio")
-        self.geometry("560x720")
-        self.minsize(480, 560)
-        self.resizable(True, True)
+        window_width = 460
+        window_height = 570
+        self.resizable(False, False)
+
+        # Centrar en pantalla
+        self.update_idletasks()
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        pos_x = max(0, (sw - window_width) // 2)
+        pos_y = max(0, (sh - window_height) // 2)
+        self.geometry(f"{window_width}x{window_height}+{pos_x}+{pos_y}")
 
         # Cargar configuración persistente
         self.config_data = load_config()
@@ -74,8 +82,9 @@ class ZaraWeatherApp(ctk.CTk):
         self.last_detected_ip_coords: Optional[tuple] = None
         self.detected_location_name = "Detectando ubicación..."
         self.is_updating = False
+        self.last_update_failed = False
 
-        # Evento para control del hilo de actualización en segundo plano
+        # Evento para control del hilo de sincronización
         self.stop_event = threading.Event()
         self.manual_trigger_event = threading.Event()
         self.worker_thread: Optional[threading.Thread] = None
@@ -91,7 +100,7 @@ class ZaraWeatherApp(ctk.CTk):
         # Interceptar el evento de cierre de ventana (botón X)
         self.protocol("WM_DELETE_WINDOW", self.on_close_clicked)
 
-        # Construir Interfaz con contenedor desplazable (anti-recorte en zoom 125%/150%)
+        # Construir Interfaz de Usuario
         self._build_ui()
 
         # Iniciar Bandeja del Sistema
@@ -104,7 +113,7 @@ class ZaraWeatherApp(ctk.CTk):
         self.latest_update_info: Optional[dict] = None
         self.is_downloading_update: bool = False
 
-        # Manejo de inicio en bandeja si fue invocado por el Registro
+        # Manejo de inicio en bandeja
         if start_in_tray:
             self.withdraw()
             self.tray_manager.notify(
@@ -117,72 +126,93 @@ class ZaraWeatherApp(ctk.CTk):
         # Comprobación silenciosa de actualizaciones en segundo plano
         self.after(3500, self._start_background_update_check)
 
+    # ==============================================================
+    # CONSTRUCCIÓN DE LA INTERFAZ
+    # ==============================================================
     def _build_ui(self):
-        """Construye todos los componentes visuales de la aplicación con diseño adaptable a DPI."""
-        self.grid_rowconfigure(0, weight=1)   # Contenedor desplazable
-        self.grid_rowconfigure(1, weight=0)   # Barra fija inferior
+        """Construye la interfaz compacta con barra de navegación superior y dos pantallas."""
+        self.grid_rowconfigure(0, weight=0)  # Barra de navegación fija superior
+        self.grid_rowconfigure(1, weight=1)  # Contenedor principal de vistas
         self.grid_columnconfigure(0, weight=1)
 
-        # ==============================================================
-        # ÁREA DE CONTENIDO DESPLAZABLE
-        # ==============================================================
-        self.scroll_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self.scroll_frame.grid(row=0, column=0, sticky="nsew", padx=6, pady=(4, 0))
-        self.scroll_frame.grid_columnconfigure(0, weight=1)
-
         # --------------------------------------------------------------
-        # 1. ENCABEZADO
+        # BARRA SUPERIOR PERSISTENTE (Título + Selector de Pestaña)
         # --------------------------------------------------------------
-        header_frame = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
-        header_frame.grid(row=0, column=0, padx=16, pady=(10, 4), sticky="ew")
-        header_frame.grid_columnconfigure(0, weight=1)
+        top_bar = ctk.CTkFrame(self, fg_color="#0f172a", corner_radius=0)
+        top_bar.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
+        top_bar.grid_columnconfigure(0, weight=1)
 
-        header_top_box = ctk.CTkFrame(header_frame, fg_color="transparent")
-        header_top_box.grid(row=0, column=0, sticky="ew")
-        header_top_box.grid_columnconfigure(0, weight=1)
+        header_box = ctk.CTkFrame(top_bar, fg_color="transparent")
+        header_box.grid(row=0, column=0, padx=14, pady=(8, 4), sticky="ew")
+        header_box.grid_columnconfigure(0, weight=1)
 
         title_label = ctk.CTkLabel(
-            header_top_box,
+            header_box,
             text="ZaraWeatherSync 🌦️",
-            font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"),
+            font=ctk.CTkFont(family="Segoe UI", size=17, weight="bold"),
             text_color="#38bdf8"
         )
         title_label.grid(row=0, column=0, sticky="w")
 
         version_badge = ctk.CTkLabel(
-            header_top_box,
+            header_box,
             text=f"v{__version__}",
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color="#0284c7",
-            fg_color="#0f172a",
+            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
+            text_color="#38bdf8",
+            fg_color="#1e293b",
             corner_radius=6,
-            padx=8,
-            pady=2
+            padx=6,
+            pady=1
         )
         version_badge.grid(row=0, column=1, sticky="e")
 
-        subtitle_label = ctk.CTkLabel(
-            header_frame,
-            text="Sincronizador meteorológico autónomo para ZaraRadio",
-            font=ctk.CTkFont(family="Segoe UI", size=12),
-            text_color="#94a3b8"
+        # Selector de Vista: [ 🌦️ Clima en Vivo ] vs [ ⚙️ Configuración ]
+        self.nav_segmented = ctk.CTkSegmentedButton(
+            top_bar,
+            values=["🌦️ Clima en Vivo", "⚙️ Configuración"],
+            command=self._on_nav_tab_changed,
+            selected_color="#0284c7",
+            selected_hover_color="#0369a1",
+            height=30
         )
-        subtitle_label.grid(row=1, column=0, sticky="w")
+        self.nav_segmented.set("🌦️ Clima en Vivo")
+        self.nav_segmented.grid(row=1, column=0, padx=14, pady=(2, 8), sticky="ew")
 
         # --------------------------------------------------------------
-        # BANNER DE ACTUALIZACIÓN (Oculto por defecto, visible si hay nueva versión)
+        # CONTENEDOR PRINCIPAL DE PANTALLAS
         # --------------------------------------------------------------
-        self.update_card = ctk.CTkFrame(self.scroll_frame, corner_radius=14, fg_color="#064e3b", border_width=1, border_color="#10b981")
+        self.content_container = ctk.CTkFrame(self, fg_color="transparent")
+        self.content_container.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
+        self.content_container.grid_rowconfigure(0, weight=1)
+        self.content_container.grid_columnconfigure(0, weight=1)
+
+        # Construir ambas pantallas
+        self._build_monitor_view()
+        self._build_config_view()
+
+        # Mostrar por defecto siempre la pantalla de clima
+        self._show_view("monitor")
+
+    # ------------------------------------------------------------------
+    # PANTALLA 1: MONITOR DE CLIMA EN VIVO
+    # ------------------------------------------------------------------
+    def _build_monitor_view(self):
+        """Pantalla principal de visualización del tiempo y estado para la radio."""
+        self.monitor_frame = ctk.CTkFrame(self.content_container, fg_color="transparent")
+        self.monitor_frame.grid_columnconfigure(0, weight=1)
+
+        # 1. Banner de Actualización (Oculto hasta que haya versión nueva)
+        self.update_card = ctk.CTkFrame(self.monitor_frame, corner_radius=12, fg_color="#064e3b", border_width=1, border_color="#10b981")
         self.update_card.grid_columnconfigure(0, weight=1)
 
         update_top = ctk.CTkFrame(self.update_card, fg_color="transparent")
-        update_top.grid(row=0, column=0, padx=12, pady=(10, 2), sticky="ew")
+        update_top.grid(row=0, column=0, padx=10, pady=(6, 2), sticky="ew")
         update_top.grid_columnconfigure(0, weight=1)
 
         self.update_title_label = ctk.CTkLabel(
             update_top,
-            text="🎉 ¡Nueva versión disponible en GitHub!",
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            text="🎉 ¡Nueva versión disponible!",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             text_color="#6ee7b7"
         )
         self.update_title_label.grid(row=0, column=0, sticky="w")
@@ -190,79 +220,76 @@ class ZaraWeatherApp(ctk.CTk):
         close_update_btn = ctk.CTkButton(
             update_top,
             text="✕",
-            width=22,
-            height=22,
+            width=20,
+            height=20,
             command=self._hide_update_banner,
             fg_color="transparent",
             hover_color="#047857",
-            font=ctk.CTkFont(size=12, weight="bold")
+            font=ctk.CTkFont(size=11, weight="bold")
         )
         close_update_btn.grid(row=0, column=1, sticky="e")
 
         self.update_notes_label = ctk.CTkLabel(
             self.update_card,
             text="",
-            font=ctk.CTkFont(size=11),
+            font=ctk.CTkFont(size=10),
             text_color="#d1fae5",
             justify="left",
-            wraplength=460
+            wraplength=400
         )
-        self.update_notes_label.grid(row=1, column=0, padx=12, pady=(0, 4), sticky="w")
+        self.update_notes_label.grid(row=1, column=0, padx=10, pady=(0, 4), sticky="w")
 
-        # Barra de progreso durante la descarga
-        self.download_progress = ctk.CTkProgressBar(self.update_card, height=8, progress_color="#10b981")
+        self.download_progress = ctk.CTkProgressBar(self.update_card, height=6, progress_color="#10b981")
         self.download_progress.set(0)
 
         self.download_status_label = ctk.CTkLabel(
             self.update_card,
             text="",
-            font=ctk.CTkFont(size=11),
+            font=ctk.CTkFont(size=10),
             text_color="#a7f3d0"
         )
 
-        self.update_btn_box = ctk.CTkFrame(self.update_card, fg_color="transparent")
-        self.update_btn_box.grid(row=4, column=0, padx=12, pady=(4, 10), sticky="ew")
-        self.update_btn_box.grid_columnconfigure((0, 1), weight=1)
+        update_btns = ctk.CTkFrame(self.update_card, fg_color="transparent")
+        update_btns.grid(row=4, column=0, padx=10, pady=(2, 8), sticky="ew")
+        update_btns.grid_columnconfigure((0, 1), weight=1)
 
         self.btn_download_update = ctk.CTkButton(
-            self.update_btn_box,
-            text="⬇ Descargar e Instalar Ahora",
-            height=30,
-            font=ctk.CTkFont(size=12, weight="bold"),
+            update_btns,
+            text="⬇ Actualizar Ahora",
+            height=26,
+            font=ctk.CTkFont(size=11, weight="bold"),
             fg_color="#10b981",
             hover_color="#059669",
             text_color="#064e3b",
             command=self._start_download_update
         )
-        self.btn_download_update.grid(row=0, column=0, padx=(0, 6), sticky="ew")
+        self.btn_download_update.grid(row=0, column=0, padx=(0, 4), sticky="ew")
 
         self.btn_view_release = ctk.CTkButton(
-            self.update_btn_box,
+            update_btns,
             text="🌐 Ver en GitHub",
-            height=30,
-            font=ctk.CTkFont(size=12),
+            height=26,
+            font=ctk.CTkFont(size=11),
             fg_color="#047857",
             hover_color="#065f46",
             command=self._open_release_notes
         )
-        self.btn_view_release.grid(row=0, column=1, padx=(6, 0), sticky="ew")
+        self.btn_view_release.grid(row=0, column=1, padx=(4, 0), sticky="ew")
 
-        # --------------------------------------------------------------
-        # 2. TARJETA PRINCIPAL DE CLIMA (Temperatura, Humedad, Última act.)
-        # --------------------------------------------------------------
-        weather_card = ctk.CTkFrame(self.scroll_frame, corner_radius=16, fg_color="#1e293b", border_width=1, border_color="#334155")
-        weather_card.grid(row=2, column=0, padx=16, pady=8, sticky="ew")
-        weather_card.grid_columnconfigure((0, 1), weight=1)
+        # 2. Tarjeta Métricas Principales (Temperatura y Humedad)
+        metrics_card = ctk.CTkFrame(self.monitor_frame, corner_radius=16, fg_color="#1e293b", border_width=1, border_color="#334155")
+        metrics_card.grid(row=1, column=0, padx=14, pady=(8, 6), sticky="ew")
+        metrics_card.grid_columnconfigure((0, 1), weight=1)
 
-        # Columna 1: Temperatura
-        temp_box = ctk.CTkFrame(weather_card, fg_color="transparent")
-        temp_box.grid(row=0, column=0, padx=12, pady=(12, 4))
+        # Bloque Temperatura
+        temp_box = ctk.CTkFrame(metrics_card, fg_color="transparent")
+        temp_box.grid(row=0, column=0, padx=10, pady=(14, 10))
 
         unit_sym = "°F" if self.current_unit == "fahrenheit" else "°C"
         self.temp_label = ctk.CTkLabel(
             temp_box,
             text=f"--{unit_sym}",
-            font=ctk.CTkFont(family="Segoe UI", size=44, weight="bold"),
+            font=ctk.CTkFont(family="Segoe UI", size=48, weight="bold"),
             text_color="#f8fafc"
         )
         self.temp_label.pack()
@@ -275,14 +302,14 @@ class ZaraWeatherApp(ctk.CTk):
         )
         self.temp_title.pack()
 
-        # Columna 2: Humedad
-        hum_box = ctk.CTkFrame(weather_card, fg_color="transparent")
-        hum_box.grid(row=0, column=1, padx=12, pady=(12, 4))
+        # Bloque Humedad
+        hum_box = ctk.CTkFrame(metrics_card, fg_color="transparent")
+        hum_box.grid(row=0, column=1, padx=10, pady=(14, 10))
 
         self.hum_label = ctk.CTkLabel(
             hum_box,
             text="--%",
-            font=ctk.CTkFont(family="Segoe UI", size=44, weight="bold"),
+            font=ctk.CTkFont(family="Segoe UI", size=48, weight="bold"),
             text_color="#f8fafc"
         )
         self.hum_label.pack()
@@ -295,381 +322,89 @@ class ZaraWeatherApp(ctk.CTk):
         )
         hum_title.pack()
 
-        # Fila Inferior de la Tarjeta: Última actualización & Estado
-        status_box = ctk.CTkFrame(weather_card, fg_color="#0f172a", corner_radius=10)
-        status_box.grid(row=1, column=0, columnspan=2, padx=12, pady=(4, 10), sticky="ew")
-        status_box.grid_columnconfigure(0, weight=1)
+        # 3. Tarjeta de Ubicación Activa y Destino ZaraRadio
+        info_card = ctk.CTkFrame(self.monitor_frame, corner_radius=14, fg_color="#1e293b", border_width=1, border_color="#334155")
+        info_card.grid(row=2, column=0, padx=14, pady=6, sticky="ew")
+        info_card.grid_columnconfigure(0, weight=1)
 
-        self.update_time_label = ctk.CTkLabel(
-            status_box,
-            text="Última actualización: Esperando sincronización...",
-            font=ctk.CTkFont(family="Segoe UI", size=12),
-            text_color="#cbd5e1"
-        )
-        self.update_time_label.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        # Ubicación
+        loc_row = ctk.CTkFrame(info_card, fg_color="transparent")
+        loc_row.grid(row=0, column=0, padx=12, pady=(10, 4), sticky="ew")
+        loc_row.grid_columnconfigure(0, weight=1)
 
-        self.status_badge = ctk.CTkLabel(
-            status_box,
-            text="Iniciando...",
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color="#38bdf8"
-        )
-        self.status_badge.grid(row=0, column=1, padx=10, pady=5, sticky="e")
-
-        # --------------------------------------------------------------
-        # 3. SECCIÓN DE UBICACIÓN (Auto por defecto, Ciudades o Coordenadas)
-        # --------------------------------------------------------------
-        loc_frame = ctk.CTkFrame(self.scroll_frame, corner_radius=14, fg_color="#1e293b", border_width=1, border_color="#334155")
-        loc_frame.grid(row=2, column=0, padx=16, pady=6, sticky="ew")
-        loc_frame.grid_columnconfigure(0, weight=1)
-
-        loc_title = ctk.CTkLabel(
-            loc_frame,
-            text="Selección de Ubicación",
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+        self.location_display_label = ctk.CTkLabel(
+            loc_row,
+            text="📍 Ubicación: Detectando...",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
             text_color="#e2e8f0"
         )
-        loc_title.grid(row=0, column=0, padx=14, pady=(10, 4), sticky="w")
+        self.location_display_label.grid(row=0, column=0, sticky="w")
 
-        # Selector de 3 Modos: "Automática (IP)", "Ciudad Predefinida", "Coordenadas"
-        raw_mode = self.config_data.get("location_mode", "auto")
-        if raw_mode == "city":
-            initial_mode_text = "Ciudad Predefinida"
-        elif raw_mode == "manual":
-            initial_mode_text = "Coordenadas"
-        else:
-            initial_mode_text = "Automática (IP)"
+        # Destino Archivo clima.txt
+        dest_row = ctk.CTkFrame(info_card, fg_color="#0f172a", corner_radius=8)
+        dest_row.grid(row=1, column=0, padx=12, pady=(4, 10), sticky="ew")
+        dest_row.grid_columnconfigure(0, weight=1)
 
-        self.loc_mode_var = ctk.StringVar(value=initial_mode_text)
-        self.loc_mode_selector = ctk.CTkSegmentedButton(
-            loc_frame,
-            values=["Automática (IP)", "Ciudad Predefinida", "Coordenadas"],
-            command=self._on_location_mode_changed,
-            variable=self.loc_mode_var,
-            selected_color="#0284c7",
-            selected_hover_color="#0369a1"
-        )
-        self.loc_mode_selector.grid(row=1, column=0, padx=14, pady=(2, 8), sticky="ew")
-
-        # Contenedor Dinámico para Detalles de Ubicación
-        self.loc_details_container = ctk.CTkFrame(loc_frame, fg_color="transparent")
-        self.loc_details_container.grid(row=2, column=0, padx=14, pady=(0, 10), sticky="ew")
-        self.loc_details_container.grid_columnconfigure(0, weight=1)
-
-        # -- Vista A: Modo Automático con Botón Fijar y Recomendación --
-        self.auto_info_box = ctk.CTkFrame(self.loc_details_container, fg_color="#0f172a", corner_radius=10)
-        self.auto_info_box.grid_columnconfigure(0, weight=1)
-
-        self.auto_info_label = ctk.CTkLabel(
-            self.auto_info_box,
-            text="📍 Ubicación Automática activa: detectando por IP pública...",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color="#38bdf8"
-        )
-        self.auto_info_label.grid(row=0, column=0, padx=12, pady=(10, 2), sticky="w")
-
-        # Cuadro de aclaración/recomendación
-        self.recommendation_box = ctk.CTkFrame(self.auto_info_box, fg_color="#1e293b", corner_radius=8, border_width=1, border_color="#334155")
-        self.recommendation_box.grid(row=1, column=0, padx=12, pady=6, sticky="ew")
-        self.recommendation_box.grid_columnconfigure(0, weight=1)
-
-        recommendation_text = (
-            "💡 Recomendación para Radios:\n"
-            "Se recomienda fijar la ubicación con el botón a continuación. Dejar el modo automático "
-            "puede provocar que ZaraRadio anuncie el clima de otra localidad si su proveedor de internet (ISP) "
-            "o módem 4G asigna dinámicamente una IP de otra provincia o cabecera de red."
-        )
-        self.rec_label = ctk.CTkLabel(
-            self.recommendation_box,
-            text=recommendation_text,
-            font=ctk.CTkFont(size=11),
-            text_color="#cbd5e1",
-            justify="left",
-            wraplength=460
-        )
-        self.rec_label.grid(row=0, column=0, padx=10, pady=8, sticky="w")
-
-        # Botón para fijar ubicación permanente
-        self.fix_location_btn = ctk.CTkButton(
-            self.auto_info_box,
-            text="📌 Fijar esta ubicación como fija (Recomendado)",
-            height=32,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color="#059669",
-            hover_color="#047857",
-            command=self._fix_current_auto_location
-        )
-        self.fix_location_btn.grid(row=2, column=0, padx=12, pady=(4, 10), sticky="ew")
-
-        # -- Vista B: Menú Desplegable de Ciudades Mundiales --
-        self.city_box = ctk.CTkFrame(self.loc_details_container, fg_color="transparent")
-        self.city_box.grid_columnconfigure(0, weight=1)
-
-        city_lbl = ctk.CTkLabel(self.city_box, text="Selecciona una ciudad destacada:", font=ctk.CTkFont(size=11), text_color="#94a3b8")
-        city_lbl.grid(row=0, column=0, sticky="w", pady=(0, 2))
-
-        self.city_combo = ctk.CTkComboBox(
-            self.city_box,
-            values=get_city_names(),
-            command=self._on_city_selected,
-            height=30
-        )
-        default_city = self.config_data.get("selected_city", "Las Toscas, Santa Fe (Argentina)")
-        if default_city in WORLD_CITIES:
-            self.city_combo.set(default_city)
-        else:
-            self.city_combo.set("Las Toscas, Santa Fe (Argentina)")
-        self.city_combo.grid(row=1, column=0, sticky="ew")
-
-        self.city_coords_label = ctk.CTkLabel(
-            self.city_box,
-            text="",
-            font=ctk.CTkFont(size=11, slant="italic"),
-            text_color="#64748b"
-        )
-        self.city_coords_label.grid(row=2, column=0, sticky="w", pady=(2, 0))
-
-        # -- Vista C: Campos para Coordenadas Manuales --
-        self.coords_box = ctk.CTkFrame(self.loc_details_container, fg_color="transparent")
-        self.coords_box.grid_columnconfigure((0, 1), weight=1)
-
-        lat_lbl = ctk.CTkLabel(self.coords_box, text="Latitud:", font=ctk.CTkFont(size=11), text_color="#94a3b8")
-        lat_lbl.grid(row=0, column=0, sticky="w", padx=2)
-
-        self.lat_entry = ctk.CTkEntry(self.coords_box, height=28, placeholder_text="-28.351")
-        self.lat_entry.insert(0, str(self.config_data.get("manual_lat", -28.351)))
-        self.lat_entry.grid(row=1, column=0, sticky="ew", padx=(0, 6), pady=(0, 4))
-
-        lon_lbl = ctk.CTkLabel(self.coords_box, text="Longitud:", font=ctk.CTkFont(size=11), text_color="#94a3b8")
-        lon_lbl.grid(row=0, column=1, sticky="w", padx=2)
-
-        self.lon_entry = ctk.CTkEntry(self.coords_box, height=28, placeholder_text="-59.259")
-        self.lon_entry.insert(0, str(self.config_data.get("manual_lon", -59.259)))
-        self.lon_entry.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=(0, 4))
-
-        self.manual_hint = ctk.CTkLabel(
-            self.coords_box,
-            text="Valores guardados: Las Toscas, Santa Fe (-28.351, -59.259)",
-            font=ctk.CTkFont(size=11, slant="italic"),
-            text_color="#64748b"
-        )
-        self.manual_hint.grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
-
-        # --------------------------------------------------------------
-        # 4. CONFIGURACIÓN METEOROLÓGICA Y API (Unidad e Intervalo)
-        # --------------------------------------------------------------
-        api_cfg_frame = ctk.CTkFrame(self.scroll_frame, corner_radius=14, fg_color="#1e293b", border_width=1, border_color="#334155")
-        api_cfg_frame.grid(row=3, column=0, padx=16, pady=6, sticky="ew")
-        api_cfg_frame.grid_columnconfigure((0, 1), weight=1)
-
-        api_title = ctk.CTkLabel(
-            api_cfg_frame,
-            text="Ajustes de Consulta (Open-Meteo API)",
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-            text_color="#e2e8f0"
-        )
-        api_title.grid(row=0, column=0, columnspan=2, padx=14, pady=(10, 6), sticky="w")
-
-        # Selector de Unidad: Celsius vs Fahrenheit
-        unit_box = ctk.CTkFrame(api_cfg_frame, fg_color="transparent")
-        unit_box.grid(row=1, column=0, padx=(14, 6), pady=(0, 10), sticky="ew")
-        unit_box.grid_columnconfigure(0, weight=1)
-
-        unit_lbl = ctk.CTkLabel(unit_box, text="Unidad de temperatura:", font=ctk.CTkFont(size=11), text_color="#94a3b8")
-        unit_lbl.grid(row=0, column=0, sticky="w", pady=(0, 2))
-
-        init_unit_str = "°F (Fahrenheit)" if self.current_unit == "fahrenheit" else "°C (Celsius)"
-        self.unit_var = ctk.StringVar(value=init_unit_str)
-        self.unit_selector = ctk.CTkSegmentedButton(
-            unit_box,
-            values=["°C (Celsius)", "°F (Fahrenheit)"],
-            variable=self.unit_var,
-            command=self._on_unit_changed,
-            selected_color="#0284c7",
-            selected_hover_color="#0369a1",
-            height=28
-        )
-        self.unit_selector.grid(row=1, column=0, sticky="ew")
-
-        # Frecuencia de Actualización con Validación de Límites de API
-        interval_box = ctk.CTkFrame(api_cfg_frame, fg_color="transparent")
-        interval_box.grid(row=1, column=1, padx=(6, 14), pady=(0, 10), sticky="ew")
-        interval_box.grid_columnconfigure(0, weight=1)
-
-        interval_lbl = ctk.CTkLabel(
-            interval_box,
-            text=f"Actualizar cada (mín {MIN_UPDATE_INTERVAL_MINUTES} min):",
+        self.monitor_path_label = ctk.CTkLabel(
+            dest_row,
+            text=f"📄 {self.config_data.get('output_dir', r'C:\ZaraRadio')}\\clima.txt",
             font=ctk.CTkFont(size=11),
             text_color="#94a3b8"
         )
-        interval_lbl.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 2))
+        self.monitor_path_label.grid(row=0, column=0, padx=8, pady=4, sticky="w")
 
-        self.interval_entry = ctk.CTkEntry(interval_box, height=28, width=70)
-        self.interval_entry.insert(0, str(self.config_data.get("update_interval_minutes", 60)))
-        self.interval_entry.grid(row=1, column=0, sticky="w")
-
-        apply_interval_btn = ctk.CTkButton(
-            interval_box,
-            text="Aplicar",
+        btn_copy_quick = ctk.CTkButton(
+            dest_row,
+            text="📋 Copiar",
             width=65,
-            height=28,
-            command=self._apply_interval_change,
-            fg_color="#334155",
-            hover_color="#475569"
-        )
-        apply_interval_btn.grid(row=1, column=1, padx=(6, 0), sticky="w")
-
-        # --------------------------------------------------------------
-        # 5. SECCIÓN DE RUTA DE SALIDA (ZARARADIO)
-        # --------------------------------------------------------------
-        path_frame = ctk.CTkFrame(self.scroll_frame, corner_radius=14, fg_color="#1e293b", border_width=1, border_color="#334155")
-        path_frame.grid(row=4, column=0, padx=16, pady=6, sticky="ew")
-        path_frame.grid_columnconfigure(0, weight=1)
-
-        path_title = ctk.CTkLabel(
-            path_frame,
-            text="Destino del archivo clima.txt para ZaraRadio",
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-            text_color="#e2e8f0"
-        )
-        path_title.grid(row=0, column=0, padx=14, pady=(10, 4), sticky="w")
-
-        path_select_box = ctk.CTkFrame(path_frame, fg_color="transparent")
-        path_select_box.grid(row=1, column=0, padx=14, pady=(0, 6), sticky="ew")
-        path_select_box.grid_columnconfigure(0, weight=1)
-
-        self.path_entry = ctk.CTkEntry(path_select_box, height=30)
-        self.path_entry.insert(0, self.config_data.get("output_dir", r"C:\ZaraRadio"))
-        self.path_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-
-        browse_btn = ctk.CTkButton(
-            path_select_box,
-            text="Examinar...",
-            width=95,
-            height=30,
-            command=self._choose_folder,
-            fg_color="#334155",
-            hover_color="#475569"
-        )
-        browse_btn.grid(row=0, column=1)
-
-        # Acciones y estado de acceso de la carpeta
-        path_actions_box = ctk.CTkFrame(path_frame, fg_color="transparent")
-        path_actions_box.grid(row=2, column=0, padx=14, pady=(0, 10), sticky="ew")
-        path_actions_box.grid_columnconfigure(0, weight=1)
-
-        self.path_status_label = ctk.CTkLabel(
-            path_actions_box,
-            text="Verificando acceso...",
-            font=ctk.CTkFont(size=11),
-            text_color="#10b981",
-            justify="left",
-            wraplength=340
-        )
-        self.path_status_label.grid(row=0, column=0, sticky="w", pady=(0, 4))
-
-        copy_path_btn = ctk.CTkButton(
-            path_actions_box,
-            text="📋 Copiar ruta para ZaraRadio",
-            height=28,
-            font=ctk.CTkFont(size=11, weight="bold"),
+            height=24,
+            font=ctk.CTkFont(size=10, weight="bold"),
             fg_color="#0284c7",
             hover_color="#0369a1",
             command=self._copy_clima_path_to_clipboard
         )
-        copy_path_btn.grid(row=0, column=1, sticky="e")
+        btn_copy_quick.grid(row=0, column=1, padx=6, pady=4, sticky="e")
 
-        # --------------------------------------------------------------
-        # 6. OPCIONES DE WINDOWS Y BANDEJA
-        # --------------------------------------------------------------
-        opt_frame = ctk.CTkFrame(self.scroll_frame, corner_radius=14, fg_color="#1e293b", border_width=1, border_color="#334155")
-        opt_frame.grid(row=5, column=0, padx=16, pady=6, sticky="ew")
-        opt_frame.grid_columnconfigure(0, weight=1)
+        # 4. Estado de Sincronización y Reintentos
+        status_box = ctk.CTkFrame(self.monitor_frame, corner_radius=12, fg_color="#0f172a", border_width=1, border_color="#1e293b")
+        status_box.grid(row=3, column=0, padx=14, pady=6, sticky="ew")
+        status_box.grid_columnconfigure(0, weight=1)
 
-        self.autostart_var = ctk.BooleanVar(value=is_autostart_enabled())
-        self.autostart_chk = ctk.CTkCheckBox(
-            opt_frame,
-            text="Iniciar automáticamente con Windows",
-            variable=self.autostart_var,
-            command=self._on_autostart_toggle,
-            font=ctk.CTkFont(size=12),
-            checkbox_width=20,
-            checkbox_height=20
+        status_top = ctk.CTkFrame(status_box, fg_color="transparent")
+        status_top.grid(row=0, column=0, padx=12, pady=(8, 2), sticky="ew")
+        status_top.grid_columnconfigure(0, weight=1)
+
+        self.update_time_label = ctk.CTkLabel(
+            status_top,
+            text="Última actualización: Esperando sincronización...",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color="#cbd5e1"
         )
-        self.autostart_chk.grid(row=0, column=0, padx=14, pady=(8, 4), sticky="w")
+        self.update_time_label.grid(row=0, column=0, sticky="w")
 
-        self.minimize_to_tray_var = ctk.BooleanVar(value=self.config_data.get("minimize_to_tray_on_close", True))
-        self.minimize_chk = ctk.CTkCheckBox(
-            opt_frame,
-            text="Minimizar a la bandeja del sistema al cerrar (X)",
-            variable=self.minimize_to_tray_var,
-            command=self._save_preferences,
-            font=ctk.CTkFont(size=12),
-            checkbox_width=20,
-            checkbox_height=20
+        self.status_badge = ctk.CTkLabel(
+            status_top,
+            text="Iniciando...",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#38bdf8"
         )
-        self.minimize_chk.grid(row=1, column=0, padx=14, pady=(4, 10), sticky="w")
+        self.status_badge.grid(row=0, column=1, sticky="e")
 
-        # --------------------------------------------------------------
-        # 7. ACERCA DE, ACTUALIZACIONES Y SOPORTE
-        # --------------------------------------------------------------
-        about_frame = ctk.CTkFrame(self.scroll_frame, corner_radius=14, fg_color="#1e293b", border_width=1, border_color="#334155")
-        about_frame.grid(row=6, column=0, padx=16, pady=6, sticky="ew")
-        about_frame.grid_columnconfigure((0, 1), weight=1)
-
-        about_title = ctk.CTkLabel(
-            about_frame,
-            text=f"Acerca de ZaraWeatherSync (v{__version__})",
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-            text_color="#e2e8f0"
+        self.next_update_label = ctk.CTkLabel(
+            status_box,
+            text="Próxima sincronización automática en espera...",
+            font=ctk.CTkFont(family="Segoe UI", size=11),
+            text_color="#64748b"
         )
-        about_title.grid(row=0, column=0, columnspan=2, padx=14, pady=(10, 4), sticky="w")
+        self.next_update_label.grid(row=1, column=0, padx=12, pady=(0, 8), sticky="w")
 
-        about_desc = ctk.CTkLabel(
-            about_frame,
-            text="Sincronizador meteorológico autónomo para ZaraRadio. Código abierto alojado en GitHub.",
-            font=ctk.CTkFont(size=11),
-            text_color="#94a3b8",
-            justify="left",
-            wraplength=460
-        )
-        about_desc.grid(row=1, column=0, columnspan=2, padx=14, pady=(0, 8), sticky="w")
-
-        about_btns_box = ctk.CTkFrame(about_frame, fg_color="transparent")
-        about_btns_box.grid(row=2, column=0, columnspan=2, padx=14, pady=(0, 10), sticky="ew")
-        about_btns_box.grid_columnconfigure((0, 1), weight=1)
-
-        self.btn_check_updates = ctk.CTkButton(
-            about_btns_box,
-            text="🔍 Buscar Actualizaciones",
-            height=30,
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#334155",
-            hover_color="#475569",
-            command=self._check_updates_manual
-        )
-        self.btn_check_updates.grid(row=0, column=0, padx=(0, 6), sticky="ew")
-
-        btn_cafecito = ctk.CTkButton(
-            about_btns_box,
-            text="☕ Donar en Cafecito",
-            height=30,
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#ea580c",
-            hover_color="#c2410c",
-            command=self._open_cafecito
-        )
-        btn_cafecito.grid(row=0, column=1, padx=(6, 0), sticky="ew")
-
-        # ==============================================================
-        # BARRA INFERIOR FIJA (Inmune a scroll y zoom DPI)
-        # ==============================================================
-        footer_bar = ctk.CTkFrame(self, fg_color="#0f172a", corner_radius=0, height=54)
-        footer_bar.grid(row=1, column=0, sticky="ew")
-        footer_bar.grid_columnconfigure((0, 1), weight=1)
+        # 5. Barra Inferior de Acciones
+        actions_bar = ctk.CTkFrame(self.monitor_frame, fg_color="transparent")
+        actions_bar.grid(row=4, column=0, padx=14, pady=(8, 10), sticky="ew")
+        actions_bar.grid_columnconfigure((0, 1), weight=1)
 
         self.refresh_btn = ctk.CTkButton(
-            footer_bar,
+            actions_bar,
             text="🔄 Actualizar Ahora",
             height=38,
             font=ctk.CTkFont(size=13, weight="bold"),
@@ -677,27 +412,434 @@ class ZaraWeatherApp(ctk.CTk):
             hover_color="#0369a1",
             command=self.trigger_manual_update
         )
-        self.refresh_btn.grid(row=0, column=0, padx=(16, 6), pady=8, sticky="ew")
+        self.refresh_btn.grid(row=0, column=0, padx=(0, 6), sticky="ew")
 
-        tray_btn = ctk.CTkButton(
-            footer_bar,
-            text="⬇ Minimizar a Bandeja",
+        btn_go_config = ctk.CTkButton(
+            actions_bar,
+            text="⚙️ Ajustes",
             height=38,
             font=ctk.CTkFont(size=13),
             fg_color="#334155",
             hover_color="#475569",
+            command=lambda: self._show_view("config")
+        )
+        btn_go_config.grid(row=0, column=1, padx=(6, 0), sticky="ew")
+
+        btn_tray_compact = ctk.CTkButton(
+            self.monitor_frame,
+            text="⬇ Minimizar a Bandeja de Windows",
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            hover_color="#1e293b",
+            text_color="#94a3b8",
             command=self.minimize_to_tray
         )
-        tray_btn.grid(row=0, column=1, padx=(6, 16), pady=8, sticky="ew")
+        btn_tray_compact.grid(row=5, column=0, padx=14, pady=(0, 8), sticky="ew")
 
-        # Configurar visibilidad inicial de la sección de ubicación y validar ruta
+    # ------------------------------------------------------------------
+    # PANTALLA 2: CONFIGURACIÓN
+    # ------------------------------------------------------------------
+    def _build_config_view(self):
+        """Pantalla de opciones y configuración con botón visible para volver al clima."""
+        self.config_frame = ctk.CTkFrame(self.content_container, fg_color="transparent")
+        self.config_frame.grid_rowconfigure(1, weight=1)
+        self.config_frame.grid_columnconfigure(0, weight=1)
+
+        # 1. Cabecera con Botón Volver
+        config_top = ctk.CTkFrame(self.config_frame, fg_color="#1e293b", corner_radius=10)
+        config_top.grid(row=0, column=0, padx=14, pady=(6, 4), sticky="ew")
+        config_top.grid_columnconfigure(1, weight=1)
+
+        btn_back_top = ctk.CTkButton(
+            config_top,
+            text="← Volver al Clima",
+            width=130,
+            height=30,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            command=lambda: self._show_view("monitor")
+        )
+        btn_back_top.grid(row=0, column=0, padx=8, pady=6, sticky="w")
+
+        cfg_heading = ctk.CTkLabel(
+            config_top,
+            text="Configuración",
+            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
+            text_color="#e2e8f0"
+        )
+        cfg_heading.grid(row=0, column=1, padx=8, pady=6, sticky="e")
+
+        # 2. Área Desplazable de Ajustes
+        self.config_scroll = ctk.CTkScrollableFrame(self.config_frame, fg_color="transparent")
+        self.config_scroll.grid(row=1, column=0, padx=6, pady=2, sticky="nsew")
+        self.config_scroll.grid_columnconfigure(0, weight=1)
+
+        # -- SECCIÓN 1: SELECCIÓN DE UBICACIÓN --
+        loc_card = ctk.CTkFrame(self.config_scroll, corner_radius=12, fg_color="#1e293b", border_width=1, border_color="#334155")
+        loc_card.grid(row=0, column=0, padx=8, pady=4, sticky="ew")
+        loc_card.grid_columnconfigure(0, weight=1)
+
+        loc_title = ctk.CTkLabel(
+            loc_card,
+            text="1. Ubicación Meteorológica",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#38bdf8"
+        )
+        loc_title.grid(row=0, column=0, padx=12, pady=(8, 4), sticky="w")
+
+        raw_mode = self.config_data.get("location_mode", "auto")
+        if raw_mode == "city":
+            init_mode = "Ciudad Predefinida"
+        elif raw_mode == "manual":
+            init_mode = "Coordenadas"
+        else:
+            init_mode = "Automática (IP)"
+
+        self.loc_mode_var = ctk.StringVar(value=init_mode)
+        self.loc_mode_selector = ctk.CTkSegmentedButton(
+            loc_card,
+            values=["Automática (IP)", "Ciudad Predefinida", "Coordenadas"],
+            command=self._on_location_mode_changed,
+            variable=self.loc_mode_var,
+            selected_color="#0284c7",
+            selected_hover_color="#0369a1",
+            height=28
+        )
+        self.loc_mode_selector.grid(row=1, column=0, padx=12, pady=(2, 6), sticky="ew")
+
+        self.loc_details_container = ctk.CTkFrame(loc_card, fg_color="transparent")
+        self.loc_details_container.grid(row=2, column=0, padx=12, pady=(0, 8), sticky="ew")
+        self.loc_details_container.grid_columnconfigure(0, weight=1)
+
+        # Vista Auto
+        self.auto_info_box = ctk.CTkFrame(self.loc_details_container, fg_color="#0f172a", corner_radius=8)
+        self.auto_info_box.grid_columnconfigure(0, weight=1)
+
+        self.auto_info_label = ctk.CTkLabel(
+            self.auto_info_box,
+            text="📍 Detectando por IP pública...",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#38bdf8"
+        )
+        self.auto_info_label.grid(row=0, column=0, padx=10, pady=(6, 2), sticky="w")
+
+        rec_box = ctk.CTkFrame(self.auto_info_box, fg_color="#1e293b", corner_radius=6)
+        rec_box.grid(row=1, column=0, padx=10, pady=4, sticky="ew")
+        rec_box.grid_columnconfigure(0, weight=1)
+
+        rec_text = (
+            "💡 Recomendación para Radios: Se aconseja fijar la ubicación "
+            "para evitar cambios si su proveedor de internet (ISP) asigna IPs de otras ciudades."
+        )
+        rec_lbl = ctk.CTkLabel(
+            rec_box,
+            text=rec_text,
+            font=ctk.CTkFont(size=10),
+            text_color="#cbd5e1",
+            justify="left",
+            wraplength=370
+        )
+        rec_lbl.grid(row=0, column=0, padx=8, pady=6, sticky="w")
+
+        self.fix_location_btn = ctk.CTkButton(
+            self.auto_info_box,
+            text="📌 Fijar esta ubicación como fija (Recomendado)",
+            height=28,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#059669",
+            hover_color="#047857",
+            command=self._fix_current_auto_location
+        )
+        self.fix_location_btn.grid(row=2, column=0, padx=10, pady=(2, 8), sticky="ew")
+
+        # Vista Ciudad
+        self.city_box = ctk.CTkFrame(self.loc_details_container, fg_color="transparent")
+        self.city_box.grid_columnconfigure(0, weight=1)
+
+        self.city_combo = ctk.CTkComboBox(
+            self.city_box,
+            values=get_city_names(),
+            command=self._on_city_selected,
+            height=28
+        )
+        default_city = self.config_data.get("selected_city", "Las Toscas, Santa Fe (Argentina)")
+        if default_city in WORLD_CITIES:
+            self.city_combo.set(default_city)
+        else:
+            self.city_combo.set("Las Toscas, Santa Fe (Argentina)")
+        self.city_combo.grid(row=0, column=0, sticky="ew")
+
+        self.city_coords_label = ctk.CTkLabel(
+            self.city_box,
+            text="",
+            font=ctk.CTkFont(size=10, slant="italic"),
+            text_color="#64748b"
+        )
+        self.city_coords_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
+
+        # Vista Coordenadas
+        self.coords_box = ctk.CTkFrame(self.loc_details_container, fg_color="transparent")
+        self.coords_box.grid_columnconfigure((0, 1), weight=1)
+
+        lat_lbl = ctk.CTkLabel(self.coords_box, text="Latitud:", font=ctk.CTkFont(size=10), text_color="#94a3b8")
+        lat_lbl.grid(row=0, column=0, sticky="w")
+        self.lat_entry = ctk.CTkEntry(self.coords_box, height=26, placeholder_text="-28.351")
+        self.lat_entry.insert(0, str(self.config_data.get("manual_lat", -28.351)))
+        self.lat_entry.grid(row=1, column=0, sticky="ew", padx=(0, 4))
+
+        lon_lbl = ctk.CTkLabel(self.coords_box, text="Longitud:", font=ctk.CTkFont(size=10), text_color="#94a3b8")
+        lon_lbl.grid(row=0, column=1, sticky="w")
+        self.lon_entry = ctk.CTkEntry(self.coords_box, height=26, placeholder_text="-59.259")
+        self.lon_entry.insert(0, str(self.config_data.get("manual_lon", -59.259)))
+        self.lon_entry.grid(row=1, column=1, sticky="ew", padx=(4, 0))
+
+        self.manual_hint = ctk.CTkLabel(
+            self.coords_box,
+            text="Valores guardados: Las Toscas (-28.351, -59.259)",
+            font=ctk.CTkFont(size=10, slant="italic"),
+            text_color="#64748b"
+        )
+        self.manual_hint.grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
+
+        btn_apply_coords = ctk.CTkButton(
+            self.coords_box,
+            text="Guardar Coordenadas",
+            height=26,
+            font=ctk.CTkFont(size=11),
+            fg_color="#334155",
+            hover_color="#475569",
+            command=self._apply_manual_coords
+        )
+        btn_apply_coords.grid(row=3, column=0, columnspan=2, pady=(4, 0), sticky="ew")
+
+        # -- SECCIÓN 2: AJUSTES DE API Y UNIDADES --
+        api_card = ctk.CTkFrame(self.config_scroll, corner_radius=12, fg_color="#1e293b", border_width=1, border_color="#334155")
+        api_card.grid(row=1, column=0, padx=8, pady=4, sticky="ew")
+        api_card.grid_columnconfigure((0, 1), weight=1)
+
+        api_title = ctk.CTkLabel(
+            api_card,
+            text="2. Parámetros de Consulta (Open-Meteo)",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#38bdf8"
+        )
+        api_title.grid(row=0, column=0, columnspan=2, padx=12, pady=(8, 4), sticky="w")
+
+        # Unidad
+        unit_box = ctk.CTkFrame(api_card, fg_color="transparent")
+        unit_box.grid(row=1, column=0, padx=(12, 4), pady=(0, 8), sticky="ew")
+        unit_box.grid_columnconfigure(0, weight=1)
+
+        unit_lbl = ctk.CTkLabel(unit_box, text="Unidad:", font=ctk.CTkFont(size=10), text_color="#94a3b8")
+        unit_lbl.grid(row=0, column=0, sticky="w")
+
+        init_unit = "°F (Fahrenheit)" if self.current_unit == "fahrenheit" else "°C (Celsius)"
+        self.unit_var = ctk.StringVar(value=init_unit)
+        self.unit_selector = ctk.CTkSegmentedButton(
+            unit_box,
+            values=["°C (Celsius)", "°F (Fahrenheit)"],
+            variable=self.unit_var,
+            command=self._on_unit_changed,
+            selected_color="#0284c7",
+            selected_hover_color="#0369a1",
+            height=26
+        )
+        self.unit_selector.grid(row=1, column=0, sticky="ew")
+
+        # Frecuencia
+        freq_box = ctk.CTkFrame(api_card, fg_color="transparent")
+        freq_box.grid(row=1, column=1, padx=(4, 12), pady=(0, 8), sticky="ew")
+        freq_box.grid_columnconfigure(0, weight=1)
+
+        freq_lbl = ctk.CTkLabel(freq_box, text=f"Intervalo (mín {MIN_UPDATE_INTERVAL_MINUTES} min):", font=ctk.CTkFont(size=10), text_color="#94a3b8")
+        freq_lbl.grid(row=0, column=0, columnspan=2, sticky="w")
+
+        self.interval_entry = ctk.CTkEntry(freq_box, height=26, width=65)
+        self.interval_entry.insert(0, str(self.config_data.get("update_interval_minutes", 60)))
+        self.interval_entry.grid(row=1, column=0, sticky="w")
+
+        apply_interval_btn = ctk.CTkButton(
+            freq_box,
+            text="Aplicar",
+            width=55,
+            height=26,
+            font=ctk.CTkFont(size=11),
+            command=self._apply_interval_change,
+            fg_color="#334155",
+            hover_color="#475569"
+        )
+        apply_interval_btn.grid(row=1, column=1, padx=(4, 0), sticky="w")
+
+        # -- SECCIÓN 3: DESTINO ZARARADIO --
+        path_card = ctk.CTkFrame(self.config_scroll, corner_radius=12, fg_color="#1e293b", border_width=1, border_color="#334155")
+        path_card.grid(row=2, column=0, padx=8, pady=4, sticky="ew")
+        path_card.grid_columnconfigure(0, weight=1)
+
+        path_title = ctk.CTkLabel(
+            path_card,
+            text="3. Destino de clima.txt para ZaraRadio",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#38bdf8"
+        )
+        path_title.grid(row=0, column=0, padx=12, pady=(8, 4), sticky="w")
+
+        path_box = ctk.CTkFrame(path_card, fg_color="transparent")
+        path_box.grid(row=1, column=0, padx=12, pady=(0, 4), sticky="ew")
+        path_box.grid_columnconfigure(0, weight=1)
+
+        self.path_entry = ctk.CTkEntry(path_box, height=28)
+        self.path_entry.insert(0, self.config_data.get("output_dir", r"C:\ZaraRadio"))
+        self.path_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+
+        browse_btn = ctk.CTkButton(
+            path_box,
+            text="Examinar...",
+            width=85,
+            height=28,
+            command=self._choose_folder,
+            fg_color="#334155",
+            hover_color="#475569"
+        )
+        browse_btn.grid(row=0, column=1)
+
+        self.path_status_label = ctk.CTkLabel(
+            path_card,
+            text="Verificando acceso...",
+            font=ctk.CTkFont(size=10),
+            text_color="#10b981",
+            justify="left",
+            wraplength=380
+        )
+        self.path_status_label.grid(row=2, column=0, padx=12, pady=(0, 4), sticky="w")
+
+        btn_copy_path = ctk.CTkButton(
+            path_card,
+            text="📋 Copiar ruta completa para ZaraRadio",
+            height=28,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#0284c7",
+            hover_color="#0369a1",
+            command=self._copy_clima_path_to_clipboard
+        )
+        btn_copy_path.grid(row=3, column=0, padx=12, pady=(2, 8), sticky="ew")
+
+        # -- SECCIÓN 4: OPCIONES DE SISTEMA --
+        sys_card = ctk.CTkFrame(self.config_scroll, corner_radius=12, fg_color="#1e293b", border_width=1, border_color="#334155")
+        sys_card.grid(row=3, column=0, padx=8, pady=4, sticky="ew")
+        sys_card.grid_columnconfigure(0, weight=1)
+
+        sys_title = ctk.CTkLabel(
+            sys_card,
+            text="4. Opciones de Windows",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#38bdf8"
+        )
+        sys_title.grid(row=0, column=0, padx=12, pady=(8, 4), sticky="w")
+
+        self.autostart_var = ctk.BooleanVar(value=is_autostart_enabled())
+        self.autostart_chk = ctk.CTkCheckBox(
+            sys_card,
+            text="Iniciar automáticamente con Windows",
+            variable=self.autostart_var,
+            command=self._on_autostart_toggle,
+            font=ctk.CTkFont(size=11),
+            checkbox_width=18,
+            checkbox_height=18
+        )
+        self.autostart_chk.grid(row=1, column=0, padx=12, pady=(2, 4), sticky="w")
+
+        self.minimize_to_tray_var = ctk.BooleanVar(value=self.config_data.get("minimize_to_tray_on_close", True))
+        self.minimize_chk = ctk.CTkCheckBox(
+            sys_card,
+            text="Minimizar a la bandeja del sistema al cerrar (X)",
+            variable=self.minimize_to_tray_var,
+            command=self._save_preferences,
+            font=ctk.CTkFont(size=11),
+            checkbox_width=18,
+            checkbox_height=18
+        )
+        self.minimize_chk.grid(row=2, column=0, padx=12, pady=(2, 8), sticky="w")
+
+        # -- SECCIÓN 5: ACTUALIZACIONES Y SOPORTE --
+        about_card = ctk.CTkFrame(self.config_scroll, corner_radius=12, fg_color="#1e293b", border_width=1, border_color="#334155")
+        about_card.grid(row=4, column=0, padx=8, pady=4, sticky="ew")
+        about_card.grid_columnconfigure((0, 1), weight=1)
+
+        about_title = ctk.CTkLabel(
+            about_card,
+            text=f"5. Acerca de ZaraWeatherSync (v{__version__})",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color="#38bdf8"
+        )
+        about_title.grid(row=0, column=0, columnspan=2, padx=12, pady=(8, 4), sticky="w")
+
+        self.btn_check_updates = ctk.CTkButton(
+            about_card,
+            text="🔍 Buscar Actualizaciones",
+            height=28,
+            font=ctk.CTkFont(size=11),
+            fg_color="#334155",
+            hover_color="#475569",
+            command=self._check_updates_manual
+        )
+        self.btn_check_updates.grid(row=1, column=0, padx=(12, 4), pady=(0, 8), sticky="ew")
+
+        btn_cafecito = ctk.CTkButton(
+            about_card,
+            text="☕ Donar en Cafecito",
+            height=28,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#ea580c",
+            hover_color="#c2410c",
+            command=self._open_cafecito
+        )
+        btn_cafecito.grid(row=1, column=1, padx=(4, 12), pady=(0, 8), sticky="ew")
+
+        # 3. Botón Fijo Inferior para Volver al Clima
+        btn_back_bottom = ctk.CTkButton(
+            self.config_frame,
+            text="✓ Guardar y Volver al Monitor de Clima",
+            height=36,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#059669",
+            hover_color="#047857",
+            command=lambda: self._show_view("monitor")
+        )
+        btn_back_bottom.grid(row=2, column=0, padx=14, pady=(6, 8), sticky="ew")
+
+        # Inicializar vistas dinámicas de ubicación y ruta
         self._update_location_ui_view()
         self._validate_current_path()
 
-    def _update_location_ui_view(self):
-        """Muestra u oculta los controles específicos según el modo seleccionado."""
-        mode_text = self.loc_mode_var.get()
+    # ==============================================================
+    # NAVEGACIÓN Y CAMBIO DE VISTAS
+    # ==============================================================
+    def _show_view(self, view_name: str):
+        """Muestra u oculta la pantalla activa (monitor o configuración)."""
+        if view_name == "config":
+            self.monitor_frame.grid_forget()
+            self.config_frame.grid(row=0, column=0, sticky="nsew")
+            self.nav_segmented.set("⚙️ Configuración")
+        else:
+            self.config_frame.grid_forget()
+            self.monitor_frame.grid(row=0, column=0, sticky="nsew")
+            self.nav_segmented.set("🌦️ Clima en Vivo")
 
+    def _on_nav_tab_changed(self, selected_tab: str):
+        """Manejador del segmented button de la barra superior."""
+        if "Configuración" in selected_tab:
+            self._show_view("config")
+        else:
+            self._show_view("monitor")
+
+    # ==============================================================
+    # MANEJADORES DE CONFIGURACIÓN
+    # ==============================================================
+    def _update_location_ui_view(self):
+        """Ajusta los controles visibles según el modo seleccionado."""
+        mode_text = self.loc_mode_var.get()
         self.auto_info_box.grid_forget()
         self.city_box.grid_forget()
         self.coords_box.grid_forget()
@@ -714,7 +856,7 @@ class ZaraWeatherApp(ctk.CTk):
             self.config_data["location_mode"] = "manual"
 
     def _update_city_coords_label(self):
-        """Actualiza el texto descriptivo de las coordenadas de la ciudad elegida."""
+        """Actualiza el texto con las coordenadas de la ciudad predefinida."""
         chosen = self.city_combo.get()
         coords = get_city_coords(chosen)
         if coords:
@@ -722,69 +864,72 @@ class ZaraWeatherApp(ctk.CTk):
             self.city_coords_label.configure(text=f"Coordenadas: Lat {lat}, Lon {lon}")
 
     def _on_location_mode_changed(self, value: str):
-        """Manejador al cambiar entre 'Automática', 'Ciudad Predefinida' y 'Coordenadas'."""
+        """Manejador al alternar entre modo Automático, Ciudad o Coordenadas."""
         self._update_location_ui_view()
         self._save_preferences()
         self.trigger_manual_update()
 
     def _fix_current_auto_location(self):
-        """
-        Transfiere las coordenadas detectadas por IP al modo manual permanente.
-        Evita que cambios de IP del ISP alteren la ciudad de la estación de radio.
-        """
+        """Fija la ubicación detectada por IP pública como coordenadas permanentes."""
         if not self.last_detected_ip_coords:
-            # Si aún no se completó la primera detección, forzar detección
             success, ip_lat, ip_lon, ip_name = get_ip_location()
             if success:
                 self.last_detected_ip_coords = (ip_lat, ip_lon, ip_name)
             else:
                 messagebox.showwarning(
                     "Detección en curso",
-                    "Aún se está detectando la ubicación por IP pública. Intente nuevamente en unos segundos."
+                    "Aún se está detectando la ubicación por IP. Intente de nuevo en unos instantes."
                 )
                 return
 
         lat, lon, city_name = self.last_detected_ip_coords
-
-        # 1. Guardar como coordenadas manuales
         self.config_data["manual_lat"] = lat
         self.config_data["manual_lon"] = lon
         self.config_data["manual_city"] = city_name
         self.config_data["location_mode"] = "manual"
 
-        # 2. Actualizar campos de texto de la pestaña Coordenadas
         self.lat_entry.delete(0, "end")
         self.lat_entry.insert(0, str(round(lat, 4)))
         self.lon_entry.delete(0, "end")
         self.lon_entry.insert(0, str(round(lon, 4)))
-        self.manual_hint.configure(text=f"Ubicación fija guardada: {city_name} ({round(lat, 4)}, {round(lon, 4)})")
+        self.manual_hint.configure(text=f"Ubicación fija: {city_name} ({round(lat, 4)}, {round(lon, 4)})")
 
-        # 3. Cambiar visualmente al modo "Coordenadas"
         self.loc_mode_var.set("Coordenadas")
         self._update_location_ui_view()
-
-        # 4. Guardar y refrescar
         self._save_preferences()
         self.trigger_manual_update()
 
         messagebox.showinfo(
-            "Ubicación Fijada",
-            f"La ubicación se ha establecido como fija exitosamente:\n\n"
+            "Ubicación Fijada con Éxito",
+            f"Se fijó permanentemente la ubicación:\n\n"
             f"📍 {city_name}\n"
-            f"Latitud: {lat}\n"
-            f"Longitud: {lon}\n\n"
-            f"A partir de ahora, la radio mantendrá esta ubicación fija aunque cambie la IP de su proveedor de internet."
+            f"Latitud: {lat} | Longitud: {lon}\n\n"
+            f"ZaraRadio mantendrá esta ubicación fija aunque cambie la IP de su proveedor de internet."
         )
 
     def _on_city_selected(self, city_name: str):
-        """Manejador al elegir una ciudad del menú desplegable."""
+        """Manejador al seleccionar una ciudad del catálogo."""
         self.config_data["selected_city"] = city_name
         self._update_city_coords_label()
         self._save_preferences()
         self.trigger_manual_update()
 
+    def _apply_manual_coords(self):
+        """Valida y guarda las coordenadas manuales ingresadas."""
+        try:
+            lat = float(self.lat_entry.get().strip())
+            lon = float(self.lon_entry.get().strip())
+            self.config_data["manual_lat"] = lat
+            self.config_data["manual_lon"] = lon
+            self.manual_hint.configure(text=f"Valores guardados: Lat {lat}, Lon {lon}")
+            self._save_preferences()
+            self.trigger_manual_update()
+            messagebox.showinfo("Coordenadas Guardadas", f"Nuevas coordenadas aplicadas:\nLatitud: {lat}, Longitud: {lon}")
+        except ValueError:
+            messagebox.showerror("Error", "Por favor introduzca valores numéricos válidos para latitud y longitud.")
+
     def _on_unit_changed(self, value: str):
-        """Manejador al cambiar la unidad entre °C y °F."""
+        """Manejador al cambiar entre °C y °F."""
         new_unit = "fahrenheit" if "°F" in value else "celsius"
         self.current_unit = new_unit
         self.config_data["temperature_unit"] = new_unit
@@ -798,18 +943,12 @@ class ZaraWeatherApp(ctk.CTk):
         self.trigger_manual_update()
 
     def _apply_interval_change(self):
-        """
-        Valida y aplica la nueva frecuencia de actualización en minutos.
-        Aplica las restricciones de la API de Open-Meteo [MIN_UPDATE_INTERVAL_MINUTES - MAX_UPDATE_INTERVAL_MINUTES].
-        """
+        """Valida y aplica la nueva frecuencia de actualización."""
         raw_val = self.interval_entry.get().strip()
         try:
             val = int(raw_val)
         except ValueError:
-            messagebox.showerror(
-                "Valor Inválido",
-                "Por favor ingrese un número entero de minutos para la frecuencia de actualización."
-            )
+            messagebox.showerror("Valor Inválido", "Introduzca un número entero de minutos.")
             self.interval_entry.delete(0, "end")
             self.interval_entry.insert(0, str(self.config_data.get("update_interval_minutes", 60)))
             return
@@ -817,32 +956,29 @@ class ZaraWeatherApp(ctk.CTk):
         if val < MIN_UPDATE_INTERVAL_MINUTES or val > MAX_UPDATE_INTERVAL_MINUTES:
             err_msg = (
                 "⚠️ Restricción de la API de Open-Meteo:\n\n"
-                f"Por políticas de uso justo y protección del servicio meteorológico, la frecuencia de actualización "
-                f"NO permite valores menores a {MIN_UPDATE_INTERVAL_MINUTES} minutos (para evitar el bloqueo o saturación "
-                f"de su dirección IP pública) ni superiores a {MAX_UPDATE_INTERVAL_MINUTES} minutos (24 horas).\n\n"
-                f"Por favor introduzca un valor entre {MIN_UPDATE_INTERVAL_MINUTES} y {MAX_UPDATE_INTERVAL_MINUTES} minutos."
+                f"Por uso justo del servicio meteorológico gratuito, el intervalo no permite valores menores "
+                f"a {MIN_UPDATE_INTERVAL_MINUTES} minutos ni mayores a {MAX_UPDATE_INTERVAL_MINUTES} minutos (24 horas).\n\n"
+                f"Introduzca un valor entre {MIN_UPDATE_INTERVAL_MINUTES} y {MAX_UPDATE_INTERVAL_MINUTES}."
             )
             messagebox.showerror("Restricción de API", err_msg)
             self.interval_entry.delete(0, "end")
             self.interval_entry.insert(0, str(self.config_data.get("update_interval_minutes", 60)))
             return
 
-        # Valor válido
         self.config_data["update_interval_minutes"] = val
         self._save_preferences()
-
-        # Despertar el hilo para reprogramar el nuevo intervalo en vivo
         self.manual_trigger_event.set()
-
-        messagebox.showinfo(
-            "Frecuencia Actualizada",
-            f"Los datos meteorológicos se actualizarán automáticamente cada {val} minutos."
-        )
+        messagebox.showinfo("Frecuencia Guardada", f"Los datos se actualizarán automáticamente cada {val} minutos.")
 
     def _validate_current_path(self):
-        """Valida que la carpeta tenga permisos de lectura/escritura y advierte sobre UAC en Archivos de Programa."""
+        """Verifica que la carpeta de destino de ZaraRadio sea accesible y con permisos."""
         target = self.path_entry.get().strip() if hasattr(self, "path_entry") else self.config_data.get("output_dir", "")
         writable, msg, is_protected = test_directory_writable(target)
+
+        if hasattr(self, "monitor_path_label"):
+            clean_path = os.path.normpath(os.path.join(target, "clima.txt"))
+            self.monitor_path_label.configure(text=f"📄 {clean_path}")
+
         if not hasattr(self, "path_status_label"):
             return
 
@@ -852,43 +988,40 @@ class ZaraWeatherApp(ctk.CTk):
             self.path_status_label.configure(text=f"⚠️ {msg}", text_color="#f59e0b")
         else:
             self.path_status_label.configure(
-                text="✓ Carpeta accesible y con permisos completos para ZaraRadio.",
+                text="✓ Carpeta accesible y con permisos de escritura para ZaraRadio.",
                 text_color="#10b981"
             )
 
     def _copy_clima_path_to_clipboard(self):
-        """Copia la ruta absoluta de clima.txt al portapapeles de Windows para pegarla en ZaraRadio."""
-        folder = self.path_entry.get().strip()
+        """Copia la ruta completa de clima.txt para pegarla directamente en ZaraRadio."""
+        folder = self.config_data.get("output_dir", r"C:\ZaraRadio")
         full_path = os.path.normpath(os.path.join(folder, "clima.txt"))
         try:
             self.clipboard_clear()
             self.clipboard_append(full_path)
             messagebox.showinfo(
-                "Ruta Copiada para ZaraRadio",
-                f"¡Ruta copiada al portapapeles con éxito!\n\n"
-                f"📄 {full_path}\n\n"
-                f"Cómo configurarlo en ZaraRadio:\n"
-                f"1. Abre ZaraRadio y ve al menú 'Herramientas > Opciones > Clima'.\n"
-                f"2. En 'Archivo de clima', haz clic derecho y pega (o presiona Ctrl+V).\n"
-                f"3. Haz clic en Aceptar."
+                "Ruta Copiada",
+                f"¡Ruta copiada al portapapeles!\n\n📄 {full_path}\n\n"
+                f"Pégala en ZaraRadio en: Herramientas > Opciones > Clima > Archivo de clima."
             )
         except Exception as e:
-            messagebox.showerror("Error", f"No se pudo copiar al portapapeles: {e}")
+            messagebox.showerror("Error", f"No se pudo copiar: {e}")
 
     def _choose_folder(self):
         """Abre diálogo para seleccionar la carpeta de ZaraRadio."""
-        current = self.path_entry.get()
+        current = self.path_entry.get().strip()
         chosen = filedialog.askdirectory(initialdir=current if os.path.exists(current) else None, title="Seleccionar Carpeta de ZaraRadio")
         if chosen:
+            clean = os.path.normpath(chosen)
             self.path_entry.delete(0, "end")
-            self.path_entry.insert(0, os.path.normpath(chosen))
-            self.config_data["output_dir"] = os.path.normpath(chosen)
+            self.path_entry.insert(0, clean)
+            self.config_data["output_dir"] = clean
             self._validate_current_path()
             self._save_preferences()
             self.trigger_manual_update()
 
     def _on_autostart_toggle(self):
-        """Activa o desactiva el registro de inicio automático en Windows."""
+        """Activa o desactiva el inicio automático con Windows."""
         enable = self.autostart_var.get()
         success, msg = set_autostart(enable)
         if success:
@@ -899,9 +1032,11 @@ class ZaraWeatherApp(ctk.CTk):
             self.autostart_var.set(is_autostart_enabled())
 
     def _save_preferences(self):
-        """Persiste las preferencias en config.json."""
+        """Guarda la configuración en disco."""
         try:
-            self.config_data["output_dir"] = self.path_entry.get().strip()
+            if hasattr(self, "path_entry"):
+                self.config_data["output_dir"] = self.path_entry.get().strip()
+
             mode_text = self.loc_mode_var.get()
             if mode_text == "Ciudad Predefinida":
                 self.config_data["location_mode"] = "city"
@@ -910,45 +1045,53 @@ class ZaraWeatherApp(ctk.CTk):
             else:
                 self.config_data["location_mode"] = "auto"
 
-            self.config_data["selected_city"] = self.city_combo.get()
+            if hasattr(self, "city_combo"):
+                self.config_data["selected_city"] = self.city_combo.get()
             self.config_data["temperature_unit"] = self.current_unit
-            self.config_data["minimize_to_tray_on_close"] = self.minimize_to_tray_var.get()
-            self.config_data["autostart"] = self.autostart_var.get()
+            if hasattr(self, "minimize_to_tray_var"):
+                self.config_data["minimize_to_tray_on_close"] = self.minimize_to_tray_var.get()
+            if hasattr(self, "autostart_var"):
+                self.config_data["autostart"] = self.autostart_var.get()
 
-            # Guardar coordenadas manuales si son válidas
-            try:
-                lat = float(self.lat_entry.get().strip())
-                lon = float(self.lon_entry.get().strip())
-                self.config_data["manual_lat"] = lat
-                self.config_data["manual_lon"] = lon
-            except (ValueError, AttributeError):
-                pass
+            if hasattr(self, "lat_entry") and hasattr(self, "lon_entry"):
+                try:
+                    self.config_data["manual_lat"] = float(self.lat_entry.get().strip())
+                    self.config_data["manual_lon"] = float(self.lon_entry.get().strip())
+                except (ValueError, AttributeError):
+                    pass
 
             save_config(self.config_data)
         except Exception as e:
-            print(f"[ERROR] Error al guardar preferencias: {e}")
+            print(f"[ERROR] Guardando preferencias: {e}")
 
     # ==============================================================
-    # LÓGICA DE SINCRONIZACIÓN Y CLIMA
+    # SINCRONIZACIÓN Y REINTENTO CADA 5 MINUTOS
     # ==============================================================
     def _start_background_worker(self):
-        """Inicia el hilo demonio de actualización periódica."""
+        """Inicia el hilo demonio de sincronización en segundo plano."""
         self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
         self.worker_thread.start()
 
     def _worker_loop(self):
-        """Bucle principal de fondo que ejecuta la consulta cada X minutos."""
-        # Ejecución inicial inmediata
+        """
+        Bucle de trabajo con reintento cada 5 minutos ante fallos de conexión.
+        Si la última actualización tuvo éxito, espera el intervalo configurado por el usuario.
+        """
+        # Consulta inicial inmediata
         self._perform_update_cycle()
 
         while not self.stop_event.is_set():
-            # Obtener intervalo actualizado dinámicamente
-            interval_mins = int(self.config_data.get("update_interval_minutes", 60))
-            if interval_mins < MIN_UPDATE_INTERVAL_MINUTES:
-                interval_mins = MIN_UPDATE_INTERVAL_MINUTES
-            interval_seconds = interval_mins * 60
+            if self.last_update_failed:
+                # Reintento por fallo de conectividad cada 5 minutos (300 segundos)
+                timeout_seconds = 5 * 60
+            else:
+                interval_mins = int(self.config_data.get("update_interval_minutes", 60))
+                if interval_mins < MIN_UPDATE_INTERVAL_MINUTES:
+                    interval_mins = MIN_UPDATE_INTERVAL_MINUTES
+                timeout_seconds = interval_mins * 60
 
-            triggered = self.manual_trigger_event.wait(timeout=interval_seconds)
+            # Esperar timeout o interrupción manual
+            triggered = self.manual_trigger_event.wait(timeout=timeout_seconds)
             if self.stop_event.is_set():
                 break
 
@@ -958,16 +1101,16 @@ class ZaraWeatherApp(ctk.CTk):
             self._perform_update_cycle()
 
     def trigger_manual_update(self):
-        """Despierta el hilo de trabajo para realizar una actualización inmediata."""
+        """Despierta inmediatamente al hilo trabajador para refrescar los datos."""
         if not self.is_updating:
             self.manual_trigger_event.set()
 
     def _perform_update_cycle(self):
-        """Ejecuta el ciclo de consulta a Open-Meteo y escritura de clima.txt."""
+        """Realiza la consulta meteorológica y la escritura en clima.txt."""
         self.is_updating = True
         self.after(0, self._set_updating_ui_state, True)
 
-        # 1. Determinar coordenadas según el modo seleccionado
+        # 1. Resolver coordenadas según modo
         mode = self.config_data.get("location_mode", "auto")
         lat = self.config_data.get("manual_lat", -28.351)
         lon = self.config_data.get("manual_lon", -59.259)
@@ -993,21 +1136,16 @@ class ZaraWeatherApp(ctk.CTk):
                 lat, lon = -28.351, -59.259
                 location_label = "Las Toscas, Santa Fe"
         else:  # manual
-            try:
-                lat = float(self.lat_entry.get().strip())
-                lon = float(self.lon_entry.get().strip())
-                location_label = f"Lat: {lat}, Lon: {lon}"
-            except (ValueError, AttributeError):
-                lat = self.config_data.get("manual_lat", -28.351)
-                lon = self.config_data.get("manual_lon", -59.259)
-                location_label = f"Lat: {lat}, Lon: {lon}"
+            lat = self.config_data.get("manual_lat", -28.351)
+            lon = self.config_data.get("manual_lon", -59.259)
+            location_label = f"Coord: {lat}, {lon}"
 
-        # 2. Consultar Open-Meteo con la unidad configurada
+        # 2. Consultar Open-Meteo
         unit = self.config_data.get("temperature_unit", "celsius")
         weather_result = fetch_weather(lat, lon, temperature_unit=unit)
 
         # 3. Escribir archivo clima.txt si fue exitoso
-        out_dir = self.path_entry.get().strip() if hasattr(self, "path_entry") else self.config_data.get("output_dir", "")
+        out_dir = self.config_data.get("output_dir", r"C:\ZaraRadio")
         file_success = False
         file_msg = ""
 
@@ -1016,62 +1154,77 @@ class ZaraWeatherApp(ctk.CTk):
             hum = weather_result["humidity"]
             file_success, file_msg = write_zara_clima_file(out_dir, temp, hum)
 
-        # 4. Actualizar la interfaz en el hilo principal
+        # 4. Actualizar interfaz gráfica
         self.after(0, self._handle_update_result, weather_result, file_success, file_msg, location_label)
 
     def _set_updating_ui_state(self, updating: bool):
-        """Actualiza el texto y botones durante la consulta."""
+        """Refleja el estado de carga en botones e indicadores."""
         if updating:
-            self.refresh_btn.configure(text="⏳ Actualizando...", state="disabled")
+            self.refresh_btn.configure(text="⏳ Sincronizando...", state="disabled")
             self.status_badge.configure(text="Consultando...", text_color="#38bdf8")
         else:
             self.refresh_btn.configure(text="🔄 Actualizar Ahora", state="normal")
 
     def _handle_update_result(self, weather_result: dict, file_success: bool, file_msg: str, location_label: str):
-        """Procesa y muestra los resultados en pantalla tras la consulta."""
+        """Procesa y presenta el resultado del ciclo de actualización."""
         self.is_updating = False
         self._set_updating_ui_state(False)
 
         now = datetime.now()
         time_str = now.strftime("%H:%M")
 
-        # Actualizar texto de estado de ubicación automática si aplica
-        if self.config_data.get("location_mode") == "auto":
+        if self.config_data.get("location_mode") == "auto" and hasattr(self, "auto_info_label"):
             self.auto_info_label.configure(text=f"📍 Detectada por IP: {self.detected_location_name}")
 
         sym = "°F" if self.current_unit == "fahrenheit" else "°C"
+
         if weather_result["success"] and file_success:
+            self.last_update_failed = False
             self.current_temp = weather_result["temperature"]
             self.current_humidity = weather_result["humidity"]
+
             self.temp_label.configure(text=f"{self.current_temp}{sym}")
             self.hum_label.configure(text=f"{self.current_humidity}%")
-            self.update_time_label.configure(text=f"Última actualización: {time_str} ({location_label[:26]})")
+            self.update_time_label.configure(text=f"Última actualización: {time_str}")
+            self.location_display_label.configure(text=f"📍 {location_label}")
             self.status_badge.configure(text="✓ Sincronizado", text_color="#10b981")
 
-            # Actualizar tooltip en bandeja del sistema
+            interval = self.config_data.get("update_interval_minutes", 60)
+            self.next_update_label.configure(
+                text=f"Próxima sincronización automática en: ~{interval} min",
+                text_color="#64748b"
+            )
+
+            # Notificar o actualizar tooltip en bandeja
             if self.tray_manager.icon:
                 try:
                     self.tray_manager.icon.title = f"ZaraWeather: {self.current_temp}{sym} | {self.current_humidity}% ({time_str})"
                 except Exception:
                     pass
         else:
-            err = weather_result.get("error") or file_msg or "Error desconocido"
-            self.status_badge.configure(text="⚠️ Error", text_color="#ef4444")
-            self.update_time_label.configure(text=f"Fallo a las {time_str}: {err[:32]}...")
+            # Fallo: activar reintento cada 5 minutos
+            self.last_update_failed = True
+            err = weather_result.get("error") or file_msg or "Error de conexión"
+            self.status_badge.configure(text="⚠️ Error de red", text_color="#ef4444")
+            self.update_time_label.configure(text=f"Fallo a las {time_str}: {err[:28]}...")
+            self.next_update_label.configure(
+                text="🔄 Reintentando automáticamente en 5 min por conectividad...",
+                text_color="#f59e0b"
+            )
 
     # ==============================================================
-    # INTEGRACIÓN CON LA BANDEJA DEL SISTEMA Y VENTANA
+    # BANDEJA DEL SISTEMA Y EVENTOS DE VENTANA
     # ==============================================================
     def minimize_to_tray(self):
-        """Oculta la ventana en la bandeja del sistema."""
+        """Minimiza la ventana a la bandeja del sistema."""
         self.withdraw()
         self.tray_manager.notify(
             "ZaraWeatherSync",
-            "La aplicación continúa actualizando clima.txt en segundo plano."
+            "La aplicación continúa sincronizando clima.txt en segundo plano."
         )
 
     def restore_from_tray(self):
-        """Restaura la ventana en el escritorio desde la bandeja."""
+        """Restaura la ventana en el escritorio."""
         self.after(0, self._do_restore)
 
     def _do_restore(self):
@@ -1080,7 +1233,7 @@ class ZaraWeatherApp(ctk.CTk):
         self.focus_force()
 
     def on_close_clicked(self):
-        """Maneja el clic en la X de la ventana."""
+        """Manejador de la X de cierre."""
         self._save_preferences()
         if self.minimize_to_tray_var.get():
             self.minimize_to_tray()
@@ -1096,10 +1249,10 @@ class ZaraWeatherApp(ctk.CTk):
         self.after(100, self.destroy)
 
     # ==============================================================
-    # SISTEMA DE AUTO-ACTUALIZACIÓN DESDE GITHUB
+    # SISTEMA DE ACTUALIZACIÓN EN VIVO (GITHUB)
     # ==============================================================
     def _start_background_update_check(self):
-        """Ejecuta una comprobación silenciosa de nuevas versiones en un hilo secundario."""
+        """Comprueba silenciosamente si hay versiones nuevas."""
         threading.Thread(target=self._run_update_check, args=(False,), daemon=True).start()
 
     def _check_updates_manual(self):
@@ -1109,9 +1262,7 @@ class ZaraWeatherApp(ctk.CTk):
         threading.Thread(target=self._run_update_check, args=(True,), daemon=True).start()
 
     def _run_update_check(self, is_manual: bool):
-        """Consulta la API de GitHub Releases y reporta el resultado a la UI."""
         result = check_for_updates()
-
         if is_manual and hasattr(self, "btn_check_updates"):
             self.after(0, lambda: self.btn_check_updates.configure(text="🔍 Buscar Actualizaciones", state="normal"))
 
@@ -1120,57 +1271,52 @@ class ZaraWeatherApp(ctk.CTk):
             if is_manual:
                 self.after(0, lambda: messagebox.showinfo(
                     "Actualización Disponible",
-                    f"¡Hay una nueva versión disponible en GitHub: {result['latest_version']}!\n\n"
-                    f"Puedes hacer clic en 'Descargar e Instalar Ahora' en la parte superior para actualizar automáticamente."
+                    f"¡Hay una nueva versión disponible: {result['latest_version']}!\n\n"
+                    f"Regresa al panel de clima para descargarla con un clic."
                 ))
         else:
             if is_manual:
                 err = result.get("error")
                 if err:
-                    self.after(0, lambda: messagebox.showwarning("Actualizaciones", f"No se pudo consultar GitHub:\n{err}"))
+                    self.after(0, lambda: messagebox.showwarning("Actualizaciones", f"No se pudo conectar:\n{err}"))
                 else:
                     self.after(0, lambda: messagebox.showinfo(
-                        "ZaraWeatherSync al Día",
+                        "Al Día",
                         f"¡Tienes instalada la versión más reciente (v{__version__})!"
                     ))
 
     def _show_update_banner(self, update_info: dict):
-        """Muestra el banner de actualización en la parte superior."""
         self.latest_update_info = update_info
         ver = update_info.get("latest_version", "Nueva versión")
         notes = update_info.get("release_notes", "").strip()
-        if len(notes) > 120:
-            notes = notes[:117] + "..."
+        if len(notes) > 100:
+            notes = notes[:97] + "..."
 
-        self.update_title_label.configure(text=f"🎉 ¡Nueva versión {ver} disponible!")
-        self.update_notes_label.configure(text=notes or "Hay una nueva versión disponible en GitHub.")
-        self.update_card.grid(row=1, column=0, padx=16, pady=(0, 8), sticky="ew")
+        self.update_title_label.configure(text=f"🎉 ¡Versión {ver} disponible!")
+        self.update_notes_label.configure(text=notes or "Nueva actualización disponible en GitHub.")
+        self.update_card.grid(row=0, column=0, padx=14, pady=(6, 4), sticky="ew")
 
     def _hide_update_banner(self):
-        """Oculta el banner de actualización."""
         self.update_card.grid_forget()
 
     def _start_download_update(self):
-        """Inicia la descarga de la nueva versión con barra de progreso."""
         if self.is_downloading_update:
             return
 
         if not self.latest_update_info or not self.latest_update_info.get("download_url"):
-            # Si no hay URL directa (ej. release sin asset o dev mode), abrir en navegador
             self._open_release_notes()
             return
 
         self.is_downloading_update = True
         self.btn_download_update.configure(state="disabled", text="⏳ Descargando...")
-        self.download_progress.grid(row=2, column=0, padx=12, pady=(4, 2), sticky="ew")
-        self.download_status_label.grid(row=3, column=0, padx=12, pady=(0, 4), sticky="w")
+        self.download_progress.grid(row=2, column=0, padx=10, pady=(2, 2), sticky="ew")
+        self.download_status_label.grid(row=3, column=0, padx=10, pady=(0, 2), sticky="w")
         self.download_status_label.configure(text="Iniciando descarga...")
 
         download_url = self.latest_update_info["download_url"]
         threading.Thread(target=self._run_download_task, args=(download_url,), daemon=True).start()
 
     def _run_download_task(self, download_url: str):
-        """Descarga el archivo en un hilo secundario y reporta progreso."""
         def on_progress(pct: float, downloaded: int, total: int):
             self.after(0, self._update_download_progress, pct, downloaded, total)
 
@@ -1178,51 +1324,40 @@ class ZaraWeatherApp(ctk.CTk):
         self.after(0, self._on_download_complete, success, temp_file, err)
 
     def _update_download_progress(self, pct: float, downloaded: int, total: int):
-        """Actualiza la barra de progreso y texto en el hilo principal."""
         self.download_progress.set(pct / 100.0)
         mb_down = downloaded / (1024 * 1024)
         mb_tot = total / (1024 * 1024)
         self.download_status_label.configure(
-            text=f"Descargando actualización... {pct:.0f}% ({mb_down:.1f} MB / {mb_tot:.1f} MB)"
+            text=f"Descargando... {pct:.0f}% ({mb_down:.1f} MB / {mb_tot:.1f} MB)"
         )
 
     def _on_download_complete(self, success: bool, temp_file: Optional[Path], err_msg: str):
-        """Manejador al completar o fallar la descarga."""
         self.is_downloading_update = False
-        self.btn_download_update.configure(state="normal", text="⬇ Descargar e Instalar Ahora")
+        self.btn_download_update.configure(state="normal", text="⬇ Actualizar Ahora")
 
         if success and temp_file and temp_file.exists():
-            self.download_status_label.configure(text="✓ Descarga completada exitosamente.", text_color="#6ee7b7")
-
-            # Si es binario congelado (.exe), preguntar para reiniciar y reemplazar en caliente
+            self.download_status_label.configure(text="✓ Descarga completada.", text_color="#6ee7b7")
             if getattr(sys, "frozen", False):
                 ans = messagebox.askyesno(
-                    "Actualización Descargada",
-                    f"La nueva versión ({self.latest_update_info.get('latest_version')}) se ha descargado correctamente.\n\n"
-                    f"¿Deseas reiniciar la aplicación ahora para completar la actualización?"
+                    "Actualización Lista",
+                    f"La actualización ({self.latest_update_info.get('latest_version')}) está lista.\n\n"
+                    f"¿Deseas reiniciar la aplicación ahora para aplicarla?"
                 )
                 if ans:
                     ok_restart, restart_msg = apply_update_and_restart(temp_file)
                     if ok_restart:
                         self.quit_completely()
                     else:
-                        messagebox.showerror("Error al Actualizar", restart_msg)
+                        messagebox.showerror("Error", restart_msg)
             else:
-                messagebox.showinfo(
-                    "Modo Desarrollo",
-                    f"El archivo actualizado se guardó en:\n{temp_file}\n\n"
-                    f"En modo desarrollo debe compilar o actualizar desde Git."
-                )
+                messagebox.showinfo("Modo Desarrollo", f"Archivo descargado en:\n{temp_file}")
         else:
             self.download_status_label.configure(text="❌ Falló la descarga.", text_color="#ef4444")
-            messagebox.showerror("Error de Descarga", f"No se pudo descargar la actualización:\n{err_msg}")
+            messagebox.showerror("Error de Descarga", f"No se pudo descargar:\n{err_msg}")
 
     def _open_release_notes(self):
-        """Abre la página del release en GitHub en el navegador predeterminado."""
         url = (self.latest_update_info or {}).get("html_url") or f"https://github.com/{GITHUB_REPO_FULL}/releases"
         webbrowser.open(url)
 
     def _open_cafecito(self):
-        """Abre el enlace de donaciones de Cafecito."""
         webbrowser.open(DONATION_URL)
-

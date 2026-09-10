@@ -2,7 +2,7 @@
 ; Permite generar el asistente interactivo de instalación (ZaraWeatherSync_Setup.exe)
 
 #define MyAppName "ZaraWeatherSync"
-#define MyAppVersion "1.2.1"
+#define MyAppVersion "1.2.2"
 #define MyAppPublisher "Hernan Cussit"
 #define MyAppURL "https://github.com/hernancussit/ZaraWeatherSync"
 #define MyAppExeName "ZaraWeatherSync.exe"
