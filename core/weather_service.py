@@ -65,7 +65,7 @@ def fetch_weather(lat: float, lon: float, temperature_unit: str = "celsius", tim
     params = {
         "latitude": round(lat, 4),
         "longitude": round(lon, 4),
-        "current": "temperature_2m,relative_humidity_2m",
+        "current": "temperature_2m,relative_humidity_2m,apparent_temperature,dew_point_2m,weather_code",
         "temperature_unit": unit_param,
         "timezone": "auto"
     }
@@ -81,28 +81,42 @@ def fetch_weather(lat: float, lon: float, temperature_unit: str = "celsius", tim
                 "success": False,
                 "temperature": None,
                 "humidity": None,
+                "apparent_temp": None,
+                "dew_point": None,
+                "weather_code": None,
                 "error": "La API no devolvió datos actuales ('current')."
             }
 
         temp_raw = current.get("temperature_2m")
         humidity_raw = current.get("relative_humidity_2m")
+        apparent_raw = current.get("apparent_temperature")
+        dew_raw = current.get("dew_point_2m")
+        w_code = current.get("weather_code")
 
         if temp_raw is None or humidity_raw is None:
             return {
                 "success": False,
                 "temperature": None,
                 "humidity": None,
+                "apparent_temp": None,
+                "dew_point": None,
+                "weather_code": None,
                 "error": "Valores de temperatura o humedad no encontrados en la respuesta."
             }
 
         # Redondeo estricto a números enteros
         temp_int = int(round(float(temp_raw)))
         humidity_int = int(round(float(humidity_raw)))
+        apparent_int = int(round(float(apparent_raw))) if apparent_raw is not None else None
+        dew_int = int(round(float(dew_raw))) if dew_raw is not None else None
 
         return {
             "success": True,
             "temperature": temp_int,
             "humidity": humidity_int,
+            "apparent_temp": apparent_int,
+            "dew_point": dew_int,
+            "weather_code": w_code,
             "unit": "°F" if unit_param == "fahrenheit" else "°C",
             "error": None
         }
