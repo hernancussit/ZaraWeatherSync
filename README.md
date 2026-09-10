@@ -18,6 +18,17 @@
 
 ---
 
+## 💾 Descargas Disponibles (Windows)
+
+Puedes descargar la última versión directamente desde [**GitHub Releases**](https://github.com/hernancussit/ZaraWeatherSync/releases/latest):
+
+| Tipo | Archivo | Descripción |
+| :--- | :--- | :--- |
+| 🌟 **Recomendado** | [**`ZaraWeatherSync_Setup.exe`**](https://github.com/hernancussit/ZaraWeatherSync/releases/latest) | **Asistente de Instalación**: Configuración guiada en español, crea accesos directos en el Menú Inicio y Escritorio, y registra el desinstalador limpio en Windows. |
+| 🧰 **Portable** | [**`ZaraWeatherSync.exe`**](https://github.com/hernancussit/ZaraWeatherSync/releases/latest) | **Ejecutable autónomo**: No requiere instalación previa; ideal para pendrives o carpetas de radio dedicadas. |
+
+---
+
 ## 🚀 Características Principales
 
 - **Diseño Moderno y Oscuro (CustomTkinter)**: Tipografía nítida y tarjetas métricas de alta visibilidad para monitores de estudio de radio.
@@ -62,8 +73,8 @@
 ### Pasos:
 ```powershell
 # 1. Clonar el repositorio
-git clone https://github.com/tu-usuario/zara-weather-sync.git
-cd zara-weather-sync
+git clone https://github.com/hernancussit/ZaraWeatherSync.git
+cd ZaraWeatherSync
 
 # 2. Crear y activar el entorno virtual
 python -m venv venv
@@ -81,27 +92,19 @@ python main.py
 
 ---
 
-## 📦 Compilación a Archivo `.exe` Independiente
-
-Ejecuta el script automatizado incluido:
+## 📦 Compilación de Ejecutable e Instalador
+ 
+### 1. Generar Ejecutable Portable (`dist\ZaraWeatherSync.exe`)
+Ejecuta el script automatizado:
 ```cmd
 build_exe.bat
 ```
 
-O compila manualmente con PyInstaller:
-```powershell
-pyinstaller --noconsole ^
-            --onefile ^
-            --clean ^
-            --name "ZaraWeatherSync" ^
-            --icon "assets\icon.ico" ^
-            --collect-all "customtkinter" ^
-            --add-data "assets;assets" ^
-            main.py
+### 2. Generar Asistente de Instalación (`dist\ZaraWeatherSync_Setup.exe`)
+Requiere [Inno Setup 6](https://jrsoftware.org/isdl.php). Ejecuta:
+```cmd
+build_installer.bat
 ```
-
-El ejecutable resultante quedará listo en:
-`dist\ZaraWeatherSync.exe`
 
 ---
 
@@ -117,11 +120,16 @@ ZaraWeatherSync incluye un sistema de auto-actualización que:
 El repositorio incluye el workflow de CI/CD [`.github/workflows/release.yml`](.github/workflows/release.yml). Cada vez que creas y subes una etiqueta de versión (tag):
 
 ```cmd
-git tag v1.2.0
-git push origin v1.2.0
+git tag v1.2.1
+git push origin v1.2.1
 ```
 
-GitHub Actions compilará automáticamente en una máquina virtual Windows el archivo `ZaraWeatherSync.exe`, calculará los hashes SHA256 y creará un **GitHub Release** público con el ejecutable listo para su descarga y auto-actualización.
+GitHub Actions compilará automáticamente en una máquina virtual Windows:
+1. `ZaraWeatherSync_Setup.exe` *(Asistente de instalación)*
+2. `ZaraWeatherSync.exe` *(Versión portable)*
+3. `SHA256SUMS.txt` *(Sumas de comprobación criptográficas)*
+
+Y publicará automáticamente un **GitHub Release** público con todos los archivos listos para su descarga.
 
 ---
 

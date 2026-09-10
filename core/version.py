@@ -2,7 +2,7 @@
 Información de versión y metadatos de ZaraWeatherSync.
 """
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 APP_NAME = "ZaraWeatherSync"
 GITHUB_OWNER = "hernancussit"
 GITHUB_REPO = "ZaraWeatherSync"

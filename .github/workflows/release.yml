@@ -44,18 +44,41 @@ jobs:
                       --add-data "assets;assets" `
                       main.py
 
-      - name: Generar suma de comprobación SHA256
+      - name: Instalar Inno Setup
+        run: |
+          choco install innosetup -y --no-progress
+
+      - name: Compilar Asistente de Instalación (Setup Wizard)
         shell: pwsh
         run: |
-          $hash = (Get-FileHash -Path dist/ZaraWeatherSync.exe -Algorithm SHA256).Hash
-          "$hash  ZaraWeatherSync.exe" | Out-File -FilePath dist/SHA256SUMS.txt -Encoding ascii
-          Write-Host "SHA256 Checksum: $hash"
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $iscc)) {
+              $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          }
+          Write-Host "Compilando instalador con: $iscc"
+          & $iscc "installer\setup.iss"
 
-      - name: Crear Release y publicar binario en GitHub
+      - name: Generar sumas de comprobación SHA256
+        shell: pwsh
+        run: |
+          $files = @("dist/ZaraWeatherSync_Setup.exe", "dist/ZaraWeatherSync.exe")
+          $output = @()
+          foreach ($f in $files) {
+              if (Test-Path $f) {
+                  $h = (Get-FileHash -Path $f -Algorithm SHA256).Hash
+                  $base = Split-Path $f -Leaf
+                  $output += "$h  $base"
+                  Write-Host "$base SHA256: $h"
+              }
+          }
+          $output | Out-File -FilePath dist/SHA256SUMS.txt -Encoding ascii
+
+      - name: Crear Release y publicar binarios en GitHub
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
           files: |
+            dist/ZaraWeatherSync_Setup.exe
             dist/ZaraWeatherSync.exe
             dist/SHA256SUMS.txt
           generate_release_notes: true

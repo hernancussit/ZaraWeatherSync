@@ -81,13 +81,15 @@ def check_for_updates(
         remote_tuple = parse_version_tuple(tag_name)
         local_tuple = parse_version_tuple(current_version)
 
-        # Buscar el ejecutable en los assets del release
+        # Buscar el ejecutable aplicable para actualización en vivo (evitando el instalador _Setup.exe)
         download_url = None
         for asset in data.get("assets", []):
             asset_name = asset.get("name", "").lower()
-            if asset_name.endswith(".exe"):
+            if asset_name == "zaraweathersync.exe":
                 download_url = asset.get("browser_download_url")
                 break
+            elif asset_name.endswith(".exe") and "setup" not in asset_name:
+                download_url = asset.get("browser_download_url")
 
         is_newer = remote_tuple > local_tuple
 
