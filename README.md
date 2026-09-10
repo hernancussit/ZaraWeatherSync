@@ -105,6 +105,26 @@ El ejecutable resultante quedará listo en:
 
 ---
 
+## 🔄 Auto-Actualización en Vivo y CI/CD
+
+### Auto-Actualización Integrada en la App
+ZaraWeatherSync incluye un sistema de auto-actualización que:
+1. Comprueba silenciosamente en GitHub Releases si hay una versión más reciente.
+2. Muestra un banner visual con las novedades de la versión.
+3. Permite descargar el nuevo binario con barra de progreso y sustituye el ejecutable en caliente en Windows sin bloqueos de archivo.
+
+### Compilación y Publicación Automatizada con GitHub Actions
+El repositorio incluye el workflow de CI/CD [`.github/workflows/release.yml`](.github/workflows/release.yml). Cada vez que creas y subes una etiqueta de versión (tag):
+
+```cmd
+git tag v1.2.0
+git push origin v1.2.0
+```
+
+GitHub Actions compilará automáticamente en una máquina virtual Windows el archivo `ZaraWeatherSync.exe`, calculará los hashes SHA256 y creará un **GitHub Release** público con el ejecutable listo para su descarga y auto-actualización.
+
+---
+
 ## ☕ Apoya este Proyecto
 
 Si este complemento te ha facilitado la automatización meteorológica en tu emisora radial, puedes colaborar con el proyecto a través de Cafecito:

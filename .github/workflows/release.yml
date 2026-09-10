@@ -1,0 +1,65 @@
+name: Release ZaraWeatherSync
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Compilar Ejecutable de Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generar recursos e iconos nativos
+        run: |
+          python assets/make_icon.py
+
+      - name: Compilar ejecutable con PyInstaller
+        run: |
+          pyinstaller --noconsole `
+                      --onefile `
+                      --clean `
+                      --name "ZaraWeatherSync" `
+                      --icon "assets\icon.ico" `
+                      --collect-all "customtkinter" `
+                      --add-data "assets;assets" `
+                      main.py
+
+      - name: Generar suma de comprobación SHA256
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Path dist/ZaraWeatherSync.exe -Algorithm SHA256).Hash
+          "$hash  ZaraWeatherSync.exe" | Out-File -FilePath dist/SHA256SUMS.txt -Encoding ascii
+          Write-Host "SHA256 Checksum: $hash"
+
+      - name: Crear Release y publicar binario en GitHub
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          files: |
+            dist/ZaraWeatherSync.exe
+            dist/SHA256SUMS.txt
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

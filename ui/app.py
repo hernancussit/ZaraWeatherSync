@@ -17,6 +17,9 @@ from typing import Optional
 
 import customtkinter as ctk
 
+import webbrowser
+from core.version import __version__, GITHUB_REPO_FULL, DONATION_URL
+from core.updater import check_for_updates, download_update_file, apply_update_and_restart
 from core.config import (
     load_config,
     save_config,
@@ -97,6 +100,10 @@ class ZaraWeatherApp(ctk.CTk):
         # Iniciar hilo de sincronización en segundo plano
         self._start_background_worker()
 
+        # Variables para sistema de auto-actualización
+        self.latest_update_info: Optional[dict] = None
+        self.is_downloading_update: bool = False
+
         # Manejo de inicio en bandeja si fue invocado por el Registro
         if start_in_tray:
             self.withdraw()
@@ -106,6 +113,9 @@ class ZaraWeatherApp(ctk.CTk):
             )
         else:
             self.deiconify()
+
+        # Comprobación silenciosa de actualizaciones en segundo plano
+        self.after(3500, self._start_background_update_check)
 
     def _build_ui(self):
         """Construye todos los componentes visuales de la aplicación con diseño adaptable a DPI."""
@@ -127,13 +137,29 @@ class ZaraWeatherApp(ctk.CTk):
         header_frame.grid(row=0, column=0, padx=16, pady=(10, 4), sticky="ew")
         header_frame.grid_columnconfigure(0, weight=1)
 
+        header_top_box = ctk.CTkFrame(header_frame, fg_color="transparent")
+        header_top_box.grid(row=0, column=0, sticky="ew")
+        header_top_box.grid_columnconfigure(0, weight=1)
+
         title_label = ctk.CTkLabel(
-            header_frame,
+            header_top_box,
             text="ZaraWeatherSync 🌦️",
             font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"),
             text_color="#38bdf8"
         )
         title_label.grid(row=0, column=0, sticky="w")
+
+        version_badge = ctk.CTkLabel(
+            header_top_box,
+            text=f"v{__version__}",
+            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+            text_color="#0284c7",
+            fg_color="#0f172a",
+            corner_radius=6,
+            padx=8,
+            pady=2
+        )
+        version_badge.grid(row=0, column=1, sticky="e")
 
         subtitle_label = ctk.CTkLabel(
             header_frame,
@@ -144,10 +170,88 @@ class ZaraWeatherApp(ctk.CTk):
         subtitle_label.grid(row=1, column=0, sticky="w")
 
         # --------------------------------------------------------------
+        # BANNER DE ACTUALIZACIÓN (Oculto por defecto, visible si hay nueva versión)
+        # --------------------------------------------------------------
+        self.update_card = ctk.CTkFrame(self.scroll_frame, corner_radius=14, fg_color="#064e3b", border_width=1, border_color="#10b981")
+        self.update_card.grid_columnconfigure(0, weight=1)
+
+        update_top = ctk.CTkFrame(self.update_card, fg_color="transparent")
+        update_top.grid(row=0, column=0, padx=12, pady=(10, 2), sticky="ew")
+        update_top.grid_columnconfigure(0, weight=1)
+
+        self.update_title_label = ctk.CTkLabel(
+            update_top,
+            text="🎉 ¡Nueva versión disponible en GitHub!",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            text_color="#6ee7b7"
+        )
+        self.update_title_label.grid(row=0, column=0, sticky="w")
+
+        close_update_btn = ctk.CTkButton(
+            update_top,
+            text="✕",
+            width=22,
+            height=22,
+            command=self._hide_update_banner,
+            fg_color="transparent",
+            hover_color="#047857",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        close_update_btn.grid(row=0, column=1, sticky="e")
+
+        self.update_notes_label = ctk.CTkLabel(
+            self.update_card,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color="#d1fae5",
+            justify="left",
+            wraplength=460
+        )
+        self.update_notes_label.grid(row=1, column=0, padx=12, pady=(0, 4), sticky="w")
+
+        # Barra de progreso durante la descarga
+        self.download_progress = ctk.CTkProgressBar(self.update_card, height=8, progress_color="#10b981")
+        self.download_progress.set(0)
+
+        self.download_status_label = ctk.CTkLabel(
+            self.update_card,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color="#a7f3d0"
+        )
+
+        self.update_btn_box = ctk.CTkFrame(self.update_card, fg_color="transparent")
+        self.update_btn_box.grid(row=4, column=0, padx=12, pady=(4, 10), sticky="ew")
+        self.update_btn_box.grid_columnconfigure((0, 1), weight=1)
+
+        self.btn_download_update = ctk.CTkButton(
+            self.update_btn_box,
+            text="⬇ Descargar e Instalar Ahora",
+            height=30,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#10b981",
+            hover_color="#059669",
+            text_color="#064e3b",
+            command=self._start_download_update
+        )
+        self.btn_download_update.grid(row=0, column=0, padx=(0, 6), sticky="ew")
+
+        self.btn_view_release = ctk.CTkButton(
+            self.update_btn_box,
+            text="🌐 Ver en GitHub",
+            height=30,
+            font=ctk.CTkFont(size=12),
+            fg_color="#047857",
+            hover_color="#065f46",
+            command=self._open_release_notes
+        )
+        self.btn_view_release.grid(row=0, column=1, padx=(6, 0), sticky="ew")
+
+        # --------------------------------------------------------------
         # 2. TARJETA PRINCIPAL DE CLIMA (Temperatura, Humedad, Última act.)
         # --------------------------------------------------------------
         weather_card = ctk.CTkFrame(self.scroll_frame, corner_radius=16, fg_color="#1e293b", border_width=1, border_color="#334155")
-        weather_card.grid(row=1, column=0, padx=16, pady=8, sticky="ew")
+        weather_card.grid(row=2, column=0, padx=16, pady=8, sticky="ew")
         weather_card.grid_columnconfigure((0, 1), weight=1)
 
         # Columna 1: Temperatura
@@ -505,6 +609,57 @@ class ZaraWeatherApp(ctk.CTk):
             checkbox_height=20
         )
         self.minimize_chk.grid(row=1, column=0, padx=14, pady=(4, 10), sticky="w")
+
+        # --------------------------------------------------------------
+        # 7. ACERCA DE, ACTUALIZACIONES Y SOPORTE
+        # --------------------------------------------------------------
+        about_frame = ctk.CTkFrame(self.scroll_frame, corner_radius=14, fg_color="#1e293b", border_width=1, border_color="#334155")
+        about_frame.grid(row=6, column=0, padx=16, pady=6, sticky="ew")
+        about_frame.grid_columnconfigure((0, 1), weight=1)
+
+        about_title = ctk.CTkLabel(
+            about_frame,
+            text=f"Acerca de ZaraWeatherSync (v{__version__})",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            text_color="#e2e8f0"
+        )
+        about_title.grid(row=0, column=0, columnspan=2, padx=14, pady=(10, 4), sticky="w")
+
+        about_desc = ctk.CTkLabel(
+            about_frame,
+            text="Sincronizador meteorológico autónomo para ZaraRadio. Código abierto alojado en GitHub.",
+            font=ctk.CTkFont(size=11),
+            text_color="#94a3b8",
+            justify="left",
+            wraplength=460
+        )
+        about_desc.grid(row=1, column=0, columnspan=2, padx=14, pady=(0, 8), sticky="w")
+
+        about_btns_box = ctk.CTkFrame(about_frame, fg_color="transparent")
+        about_btns_box.grid(row=2, column=0, columnspan=2, padx=14, pady=(0, 10), sticky="ew")
+        about_btns_box.grid_columnconfigure((0, 1), weight=1)
+
+        self.btn_check_updates = ctk.CTkButton(
+            about_btns_box,
+            text="🔍 Buscar Actualizaciones",
+            height=30,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#334155",
+            hover_color="#475569",
+            command=self._check_updates_manual
+        )
+        self.btn_check_updates.grid(row=0, column=0, padx=(0, 6), sticky="ew")
+
+        btn_cafecito = ctk.CTkButton(
+            about_btns_box,
+            text="☕ Donar en Cafecito",
+            height=30,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#ea580c",
+            hover_color="#c2410c",
+            command=self._open_cafecito
+        )
+        btn_cafecito.grid(row=0, column=1, padx=(6, 0), sticky="ew")
 
         # ==============================================================
         # BARRA INFERIOR FIJA (Inmune a scroll y zoom DPI)
@@ -939,3 +1094,135 @@ class ZaraWeatherApp(ctk.CTk):
         self.manual_trigger_event.set()
         self.tray_manager.stop()
         self.after(100, self.destroy)
+
+    # ==============================================================
+    # SISTEMA DE AUTO-ACTUALIZACIÓN DESDE GITHUB
+    # ==============================================================
+    def _start_background_update_check(self):
+        """Ejecuta una comprobación silenciosa de nuevas versiones en un hilo secundario."""
+        threading.Thread(target=self._run_update_check, args=(False,), daemon=True).start()
+
+    def _check_updates_manual(self):
+        """Manejador del botón 'Buscar Actualizaciones'."""
+        if hasattr(self, "btn_check_updates"):
+            self.btn_check_updates.configure(text="⏳ Comprobando...", state="disabled")
+        threading.Thread(target=self._run_update_check, args=(True,), daemon=True).start()
+
+    def _run_update_check(self, is_manual: bool):
+        """Consulta la API de GitHub Releases y reporta el resultado a la UI."""
+        result = check_for_updates()
+
+        if is_manual and hasattr(self, "btn_check_updates"):
+            self.after(0, lambda: self.btn_check_updates.configure(text="🔍 Buscar Actualizaciones", state="normal"))
+
+        if result.get("update_available"):
+            self.after(0, self._show_update_banner, result)
+            if is_manual:
+                self.after(0, lambda: messagebox.showinfo(
+                    "Actualización Disponible",
+                    f"¡Hay una nueva versión disponible en GitHub: {result['latest_version']}!\n\n"
+                    f"Puedes hacer clic en 'Descargar e Instalar Ahora' en la parte superior para actualizar automáticamente."
+                ))
+        else:
+            if is_manual:
+                err = result.get("error")
+                if err:
+                    self.after(0, lambda: messagebox.showwarning("Actualizaciones", f"No se pudo consultar GitHub:\n{err}"))
+                else:
+                    self.after(0, lambda: messagebox.showinfo(
+                        "ZaraWeatherSync al Día",
+                        f"¡Tienes instalada la versión más reciente (v{__version__})!"
+                    ))
+
+    def _show_update_banner(self, update_info: dict):
+        """Muestra el banner de actualización en la parte superior."""
+        self.latest_update_info = update_info
+        ver = update_info.get("latest_version", "Nueva versión")
+        notes = update_info.get("release_notes", "").strip()
+        if len(notes) > 120:
+            notes = notes[:117] + "..."
+
+        self.update_title_label.configure(text=f"🎉 ¡Nueva versión {ver} disponible!")
+        self.update_notes_label.configure(text=notes or "Hay una nueva versión disponible en GitHub.")
+        self.update_card.grid(row=1, column=0, padx=16, pady=(0, 8), sticky="ew")
+
+    def _hide_update_banner(self):
+        """Oculta el banner de actualización."""
+        self.update_card.grid_forget()
+
+    def _start_download_update(self):
+        """Inicia la descarga de la nueva versión con barra de progreso."""
+        if self.is_downloading_update:
+            return
+
+        if not self.latest_update_info or not self.latest_update_info.get("download_url"):
+            # Si no hay URL directa (ej. release sin asset o dev mode), abrir en navegador
+            self._open_release_notes()
+            return
+
+        self.is_downloading_update = True
+        self.btn_download_update.configure(state="disabled", text="⏳ Descargando...")
+        self.download_progress.grid(row=2, column=0, padx=12, pady=(4, 2), sticky="ew")
+        self.download_status_label.grid(row=3, column=0, padx=12, pady=(0, 4), sticky="w")
+        self.download_status_label.configure(text="Iniciando descarga...")
+
+        download_url = self.latest_update_info["download_url"]
+        threading.Thread(target=self._run_download_task, args=(download_url,), daemon=True).start()
+
+    def _run_download_task(self, download_url: str):
+        """Descarga el archivo en un hilo secundario y reporta progreso."""
+        def on_progress(pct: float, downloaded: int, total: int):
+            self.after(0, self._update_download_progress, pct, downloaded, total)
+
+        success, temp_file, err = download_update_file(download_url, progress_callback=on_progress)
+        self.after(0, self._on_download_complete, success, temp_file, err)
+
+    def _update_download_progress(self, pct: float, downloaded: int, total: int):
+        """Actualiza la barra de progreso y texto en el hilo principal."""
+        self.download_progress.set(pct / 100.0)
+        mb_down = downloaded / (1024 * 1024)
+        mb_tot = total / (1024 * 1024)
+        self.download_status_label.configure(
+            text=f"Descargando actualización... {pct:.0f}% ({mb_down:.1f} MB / {mb_tot:.1f} MB)"
+        )
+
+    def _on_download_complete(self, success: bool, temp_file: Optional[Path], err_msg: str):
+        """Manejador al completar o fallar la descarga."""
+        self.is_downloading_update = False
+        self.btn_download_update.configure(state="normal", text="⬇ Descargar e Instalar Ahora")
+
+        if success and temp_file and temp_file.exists():
+            self.download_status_label.configure(text="✓ Descarga completada exitosamente.", text_color="#6ee7b7")
+
+            # Si es binario congelado (.exe), preguntar para reiniciar y reemplazar en caliente
+            if getattr(sys, "frozen", False):
+                ans = messagebox.askyesno(
+                    "Actualización Descargada",
+                    f"La nueva versión ({self.latest_update_info.get('latest_version')}) se ha descargado correctamente.\n\n"
+                    f"¿Deseas reiniciar la aplicación ahora para completar la actualización?"
+                )
+                if ans:
+                    ok_restart, restart_msg = apply_update_and_restart(temp_file)
+                    if ok_restart:
+                        self.quit_completely()
+                    else:
+                        messagebox.showerror("Error al Actualizar", restart_msg)
+            else:
+                messagebox.showinfo(
+                    "Modo Desarrollo",
+                    f"El archivo actualizado se guardó en:\n{temp_file}\n\n"
+                    f"En modo desarrollo debe compilar o actualizar desde Git."
+                )
+        else:
+            self.download_status_label.configure(text="❌ Falló la descarga.", text_color="#ef4444")
+            messagebox.showerror("Error de Descarga", f"No se pudo descargar la actualización:\n{err_msg}")
+
+    def _open_release_notes(self):
+        """Abre la página del release en GitHub en el navegador predeterminado."""
+        url = (self.latest_update_info or {}).get("html_url") or f"https://github.com/{GITHUB_REPO_FULL}/releases"
+        webbrowser.open(url)
+
+    def _open_cafecito(self):
+        """Abre el enlace de donaciones de Cafecito."""
+        webbrowser.open(DONATION_URL)
+
