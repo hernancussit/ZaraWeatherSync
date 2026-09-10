@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Entornos virtuales y dependencias locales
+venv/
+env/
+ENV/
+.venv/
+
+# Salidas de compilación PyInstaller
+build/
+dist/
+*.spec
+
+# Archivos de configuración local y datos generados en runtime
+config.json
+clima.txt
+*.tmp
+*.log
+
+# Editores e IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
